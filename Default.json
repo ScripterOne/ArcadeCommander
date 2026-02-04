@@ -1,0 +1,259 @@
+{
+    "leds": {
+        "P1_A": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P1_B": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P1_C": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P1_X": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P1_Y": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P1_Z": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_A": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_B": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_C": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_X": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_Y": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "P2_Z": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "REWIND": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_START": {
+            "primary": [
+                128,
+                255,
+                255
+            ],
+            "secondary": [
+                255,
+                0,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "MENU": {
+            "primary": [
+                255,
+                0,
+                255
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_START": {
+            "primary": [
+                255,
+                0,
+                0
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        },
+        "TRACKBALL": {
+            "primary": [
+                255,
+                128,
+                192
+            ],
+            "secondary": [
+                255,
+                0,
+                128
+            ],
+            "pulse": true,
+            "speed": 1.0,
+            "phase": 431.8000000000297
+        }
+    }
+}
