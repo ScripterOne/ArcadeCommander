@@ -1,19 +1,15 @@
 """
-Arcade Commander - ArcadeDriver (v5.3+ port-init patch)
-
-Key improvements:
-- Arcade(port=..., baud=...) supported (keyword args accepted)
-- reconnect(port) method to switch COM ports without restarting the app
-- available_ports() helper for GUI port picker
-- send_frame(frame) for direct 30-LED frame writes (used by ArcadeTester / attract)
-- wheel(pos) color helper
-
-This module keeps the Adalight header format and your per-index color order rules.
+Arcade Commander V2.0 - Hybrid Driver (Dynamic Fix)
+---------------------------------------------------
+INTELLIGENCE:
+1. Dynamic LED Count: Automatically adjusts header based on how many pixels exist.
+2. Checks for 'ACNexus' Service on Port 6006.
 """
 
 import struct
 import time
-
+import socket
+import json
 import serial
 from serial import SerialTimeoutException
 
@@ -23,185 +19,139 @@ try:
 except Exception:
     _HAS_LIST_PORTS = False
 
-
-# --- DEFAULT CONFIGURATION ---
+# --- CONFIGURATION ---
 DEFAULT_PORT = "COM3"
 DEFAULT_BAUD = 230400
-NUM_LEDS = 30
+DEFAULT_LEDS = 30  # Default only, overridden by usage
+THROTTLE = 0.005   # Reduced throttle for 60FPS
 
-# 0.02 = 50 FPS cap (smooth + safer on serial)
-THROTTLE = 0.02
+# --- HARDWARE QUIRKS ---
+BUTTON_ORDER = "BRG"     
+TRACKBALL_ORDER = "GRB"  
 
-# --- COLOR ORDER CONFIGURATION ---
-BUTTON_ORDER = "BRG"     # most button channels
-TRACKBALL_ORDER = "GRB"  # pin 17 / index 16
-
+# --- PIN MAPPING ---
+PIN_MAP = {
+    "P1_A": 0, "P1_B": 1, "P1_C": 2, "P1_X": 3, "P1_Y": 4, "P1_Z": 5,
+    "P2_A": 6, "P2_B": 7, "P2_C": 8, "P2_X": 9, "P2_Y": 10, "P2_Z": 11,
+    "REWIND": 12, "P1_START": 13, "MENU": 14, "P2_START": 15, "TRACKBALL": 16,
+}
+PIN_MAP_REV = {v: k for k, v in PIN_MAP.items()}
 
 def available_ports():
-    """Return a list of COM port device names like ['COM3','COM7']."""
-    if not _HAS_LIST_PORTS:
-        return []
     ports = []
-    for p in list_ports.comports():
-        # On Windows p.device is like 'COM3'
-        if getattr(p, "device", None):
-            ports.append(p.device)
+    if check_service(): ports.append("Nexus Service (V2)")
+    if _HAS_LIST_PORTS:
+        for p in list_ports.comports():
+            if getattr(p, "device", None): ports.append(p.device)
     return ports
 
+def check_service():
+    try:
+        with socket.create_connection(("127.0.0.1", 6006), timeout=0.1): return True
+    except: return False
 
-def wheel(pos: int):
-    """Color wheel helper (0..255)."""
-    pos = int(pos) % 256
-    if pos < 85:
-        return (pos * 3, 255 - pos * 3, 0)
-    if pos < 170:
-        pos -= 85
-        return (255 - pos * 3, 0, pos * 3)
-    pos -= 170
-    return (0, pos * 3, 255 - pos * 3)
-
+def wheel(pos):
+    if pos < 85: return (pos * 3, 255 - pos * 3, 0)
+    elif pos < 170: pos -= 85; return (255 - pos * 3, 0, pos * 3)
+    else: pos -= 170; return (0, pos * 3, 255 - pos * 3)
 
 class Arcade:
-    """
-    Adalight-compatible WS2812B controller driver for PicoCTR + WS2812B adapter.
-
-    Note: Many older builds hard-coded DEFAULT_PORT in __init__.
-    This version keeps defaults but allows overriding port/baud safely.
-    """
-
-    LEDS = {
-        # Player 1
-        "P1_A": 0, "P1_B": 1, "P1_C": 2,
-        "P1_X": 3, "P1_Y": 4, "P1_Z": 5,
-
-        # Player 2
-        "P2_A": 6, "P2_B": 7, "P2_C": 8,
-        "P2_X": 9, "P2_Y": 10, "P2_Z": 11,
-
-        # Admin / Starts
-        "REWIND": 12,
-        "P1_START": 13,
-        "MENU": 14,
-        "P2_START": 15,
-
-        # Trackball (Pin 17) -> index 16
-        "TRACKBALL": 16,
-    }
-
-    def __init__(self, port: str | None = None, baud: int | None = None):
-        self.port = port or DEFAULT_PORT
-        self.baud = int(baud or DEFAULT_BAUD)
+    def __init__(self, port=None, baud=DEFAULT_BAUD, led_count=DEFAULT_LEDS):
+        self.LEDS = PIN_MAP
+        self.mode = "NONE"
+        self.sock = None
         self.ser = None
-        self.pixels = [(0, 0, 0)] * NUM_LEDS
-        self._last_write = 0.0
+        # Initialize pixels with the requested count
+        self.pixels = [(0,0,0)] * led_count
+        self._last_write = 0
+        self.baud = baud or DEFAULT_BAUD
+        self.reconnect(port)
 
-        self._open_serial(self.port, self.baud)
+    def reconnect(self, port=None):
+        self.close()
+        if self._connect_nexus():
+            self.mode = "NETWORK"
+            print(f"[Driver] Connected via Nexus Service (V2)")
+        else:
+            print(f"[Driver] Falling back to Direct USB.")
+            self.mode = "SERIAL"
+            self._connect_serial(port, self.baud)
 
-    # ---------------- Connection ----------------
-    def _open_serial(self, port: str, baud: int):
+    def is_connected(self): return self.mode != "NONE"
+
+    def _connect_nexus(self):
         try:
-            # write_timeout prevents infinite hangs if a frame stalls
-            self.ser = serial.Serial(port, baud, timeout=1, write_timeout=0.1)
-            self.port = port
-            self.baud = int(baud)
-            time.sleep(2)  # allow MCU boot/reset
-            print(f"Arcade Controller Connected on {self.port} @ {self.baud}bps")
-        except Exception as e:
-            print(f"Hardware Connection Failed: {e}")
-            self.ser = None
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(0.5)
+            self.sock.connect(("127.0.0.1", 6006))
+            return True
+        except: return False
 
-    def reconnect(self, port: str | None = None, baud: int | None = None):
-        """Close and reopen serial on a new COM port / baud."""
-        new_port = port or self.port or DEFAULT_PORT
-        new_baud = int(baud or self.baud or DEFAULT_BAUD)
+    def _connect_serial(self, port, baud):
+        if not port:
+            ports = available_ports()
+            real_ports = [p for p in ports if "Nexus" not in p]
+            port = real_ports[0] if real_ports else DEFAULT_PORT
+            
         try:
-            if self.ser:
-                try:
-                    self.ser.close()
-                except Exception:
-                    pass
-        finally:
-            self.ser = None
+            self.ser = serial.Serial(port, baud, timeout=1)
+            self.ser.dtr = False 
+            time.sleep(1) 
+            print(f"[Driver] Opened {port} @ {baud}")
+        except Exception as e: print(f"[Driver] Serial Error: {e}")
 
-        self._open_serial(new_port, new_baud)
+    def set(self, n, c):
+        idx = n if isinstance(n, int) else PIN_MAP.get(n, -1)
+        if 0 <= idx < len(self.pixels):
+            self.pixels[idx] = c
+        
+        if self.mode == "NETWORK":
+            target = PIN_MAP_REV.get(idx, idx)
+            c_str = f"{c[0]},{c[1]},{c[2]}"
+            self._net_send({"command": "set", "target": target, "color": c_str})
 
-    def is_connected(self) -> bool:
-        return self.ser is not None
+    def set_all(self, c):
+        # Keep the current length, just update colors
+        self.pixels = [c] * len(self.pixels)
+        if self.mode == "NETWORK":
+            c_str = f"{c[0]},{c[1]},{c[2]}"
+            self._net_send({"command": "set", "target": "ALL", "color": c_str})
 
-    # ---------------- Pixel State ----------------
-    def set(self, name: str, color: tuple[int, int, int]):
-        if name in self.LEDS:
-            self.pixels[self.LEDS[name]] = tuple(map(int, color))
-
-    def set_all(self, color: tuple[int, int, int]):
-        c = tuple(map(int, color))
-        self.pixels = [c] * NUM_LEDS
-
-    def send_frame(self, frame):
-        """
-        Immediately write a full 30-LED frame to hardware.
-        frame: iterable of 30 tuples (r,g,b)
-        """
-        if not frame:
-            return
-        # normalize length
-        pixels = list(frame)[:NUM_LEDS]
-        if len(pixels) < NUM_LEDS:
-            pixels += [(0, 0, 0)] * (NUM_LEDS - len(pixels))
-        self.pixels = [tuple(map(int, c)) for c in pixels]
-        self.show()
-
-    # ---------------- Adalight Write ----------------
     def show(self):
-        if not self.ser:
-            return
-
-        # throttle writes to avoid overruns
-        now = time.time()
-        if (now - self._last_write) < THROTTLE:
-            return
-        self._last_write = now
-
-        count = NUM_LEDS - 1
-        checksum = ((count >> 8) & 0xFF) ^ (count & 0xFF) ^ 0x55
-        header = struct.pack(">3sBBB", b"Ada", (count >> 8) & 0xFF, count & 0xFF, checksum)
-
-        payload = bytearray()
-        for i, (r, g, b) in enumerate(self.pixels):
-            if i == 16:
-                mode = TRACKBALL_ORDER.strip().upper()
-            else:
-                mode = BUTTON_ORDER.strip().upper()
-
-            if mode == "GRB":
-                payload.extend((g, r, b))
-            elif mode == "BGR":
-                payload.extend((b, g, r))
-            elif mode == "RBG":
-                payload.extend((r, b, g))
-            elif mode == "GBR":
-                payload.extend((g, b, r))
-            elif mode == "BRG":
-                payload.extend((b, r, g))
-            else:
-                payload.extend((r, g, b))
-
-        try:
-            self.ser.write(header + payload)
-        except SerialTimeoutException:
-            # Skip this frame. Do not crash the app.
-            print("Serial Write Timeout - Skipping Frame")
-            try:
-                self.ser.reset_output_buffer()
-            except Exception:
-                pass
-        except Exception as e:
-            print(f"Serial Error: {e}")
+        if self.mode == "SERIAL": self._serial_write()
 
     def close(self):
-        if self.ser:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-        self.ser = None
+        if self.sock: self.sock.close()
+        if self.ser: self.ser.close()
+        self.mode = "NONE"
+
+    def _net_send(self, msg):
+        try:
+            self.sock.sendall(json.dumps(msg).encode('utf-8'))
+        except: self.mode = "NONE"
+
+    def _serial_write(self):
+        if not self.ser: return
+        
+        # --- DYNAMIC COUNT FIX ---
+        # We calculate count based on the ACTUAL buffer size, not a hardcoded constant
+        num_leds = len(self.pixels)
+        count = num_leds - 1
+        
+        # Checksum logic (Standard Adalight)
+        checksum = ((count >> 8) & 0xFF) ^ (count & 0xFF) ^ 0x55
+        header = struct.pack(">3sBBB", b"Ada", (count >> 8) & 0xFF, count & 0xFF, checksum)
+        
+        payload = bytearray()
+        for i, (r, g, b) in enumerate(self.pixels):
+            # Quirk Logic
+            if i == 16: mode = TRACKBALL_ORDER
+            else: mode = BUTTON_ORDER
+            
+            if mode == "GRB": payload.extend((g, r, b))
+            elif mode == "BRG": payload.extend((b, r, g))
+            else: payload.extend((r, g, b)) 
+            
+        try:
+            self.ser.write(header + payload)
+        except: pass

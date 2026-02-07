@@ -2,93 +2,87 @@
     "leds": {
         "P1_A": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P1_B": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P1_C": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P1_X": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P1_Y": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P1_Z": {
             "primary": [
-                128,
-                255,
-                255
-            ],
-            "secondary": [
-                255,
+                0,
                 0,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_A": {
             "primary": [
@@ -97,13 +91,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_B": {
             "primary": [
@@ -112,13 +105,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_C": {
             "primary": [
@@ -127,13 +119,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_X": {
             "primary": [
@@ -142,13 +133,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_Y": {
             "primary": [
@@ -157,13 +147,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "P2_Z": {
             "primary": [
@@ -172,13 +161,12 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "REWIND": {
             "primary": [
@@ -187,73 +175,68 @@
                 0
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
             "pulse": false,
-            "speed": 1.0,
-            "phase": 0.0
+            "speed": 1.0
         },
         "P1_START": {
             "primary": [
-                128,
+                255,
                 255,
                 255
             ],
             "secondary": [
-                255,
                 0,
-                255
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         },
         "MENU": {
             "primary": [
                 255,
-                0,
+                255,
                 255
             ],
             "secondary": [
-                255,
-                255,
-                255
+                0,
+                0,
+                0
             ],
             "pulse": false,
-            "speed": 1.0,
-            "phase": 0.0
+            "speed": 1.0
         },
         "P2_START": {
             "primary": [
                 255,
-                0,
-                0
-            ],
-            "secondary": [
-                255,
                 255,
                 255
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "secondary": [
+                0,
+                0,
+                0
+            ],
+            "pulse": false,
+            "speed": 1.0
         },
         "TRACKBALL": {
             "primary": [
                 255,
-                128,
-                192
+                255,
+                255
             ],
             "secondary": [
-                255,
                 0,
-                128
+                0,
+                0
             ],
-            "pulse": true,
-            "speed": 1.0,
-            "phase": 431.8000000000297
+            "pulse": false,
+            "speed": 1.0
         }
     }
 }

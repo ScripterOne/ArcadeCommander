@@ -1,200 +1,76 @@
-# ArcadeTester.py
-# Hardware validation & demo utility for PicoCTR + WS2812B 30ch adapter
-# NOTE:
-#   - Physical board pins are 1..30
-#   - Internally we map Pin N -> index (N-1)
-
-from ArcadeDriver import Arcade, wheel
 import time
 import math
 
-PHYSICAL_PINS = 30
-
-
-def pin_to_index(pin: int) -> int:
-    """Convert physical pin number (1..30) to Python index (0..29)."""
-    return pin - 1
-
-
-def all_off(cab: Arcade):
-    cab.send_frame([(0, 0, 0)] * PHYSICAL_PINS)
-
-
-# ------------------------------------------------------------
-# DIAGNOSTIC: PIN MAPPER
-# ------------------------------------------------------------
-def pin_mapper(cab: Arcade):
+def quick_sanity_test(cab):
     """
-    Lights up each pin individually for 1 second.
-    Useful for verifying physical pin layout matches firmware mapping.
+    Flashes Pin 0 (P1_A) and Pin 16 (TRACKBALL).
+    Matches your hardware requirement: 
+    Pin 1 -> RED, Pin 17 -> BLUE
     """
-    print("\n[Pin Mapper Diagnostic]")
-    print("Each pin will light WHITE for 1 second.\n")
+    print("[Tester] Running Quick Sanity Test...")
     
-    for pin in range(1, PHYSICAL_PINS + 1):
-        frame = [(0, 0, 0)] * PHYSICAL_PINS
-        frame[pin_to_index(pin)] = (255, 255, 255)
-        print(f"Lighting Pin {pin:02d}...")
-        cab.send_frame(frame)
-        time.sleep(1.0)
+    # We use indices 0 and 16 to ensure compatibility with ServiceAdapter
+    for _ in range(3):
+        # Step 1: Pin 1 (Index 0) -> RED
+        cab.set(0, (255, 0, 0))
+        # Step 2: Pin 17 (Index 16) -> BLUE
+        cab.set(16, (0, 0, 255))
+        cab.show()
+        time.sleep(0.5)
+        
+        # Step 3: All Off
+        cab.set_all((0, 0, 0))
+        cab.show()
+        time.sleep(0.5)
     
-    all_off(cab)
-    print("Pin mapper complete.\n")
+    print("[Tester] Starting Green Chase across all pins...")
+    # Step 4: Green chase across Pin 1..17
+    for i in range(17):
+        cab.set(i, (0, 255, 0))
+        cab.show()
+        time.sleep(0.1)
+        cab.set(i, (0, 0, 0))
+        cab.show()
 
+def button_finder(cab):
+    """Green chase across all buttons."""
+    print("[Tester] Running Pin Finder (Green Chase)...")
+    for i in range(17):
+        cab.set(i, (0, 255, 0))
+        cab.show()
+        time.sleep(0.1)
+        cab.set(i, (0, 0, 0))
+        cab.show()
 
-# ------------------------------------------------------------
-# QUICK SANITY TEST
-# ------------------------------------------------------------
-def quick_sanity_test(cab: Arcade):
-    print("\n[Quick Sanity Test]")
-    print("• Pin 1  -> RED")
-    print("• Pin 17 -> BLUE (Trackball)")
-    print("• Then green chase across Pin 1..30\n")
-
-    frame = [(0, 0, 0)] * PHYSICAL_PINS
-
-    frame[pin_to_index(1)] = (255, 0, 0)     # Pin 1
-    frame[pin_to_index(17)] = (0, 0, 255)    # Pin 17 (Trackball)
-
-    cab.send_frame(frame)
-    time.sleep(2)
-
-    print("Green chase...")
-    for pin in range(1, PHYSICAL_PINS + 1):
-        frame = [(0, 0, 0)] * PHYSICAL_PINS
-        frame[pin_to_index(pin)] = (0, 255, 0)
-        print(f"Pin {pin:02d}")
-        cab.send_frame(frame)
-        time.sleep(0.20)
-
-    all_off(cab)
-    print("Sanity test complete.\n")
-
-
-# ------------------------------------------------------------
-# BUTTON / PIN FINDER
-# ------------------------------------------------------------
-def button_finder(cab: Arcade, delay_per_color=0.35):
-    """
-    For each physical pin (1..30), cycle:
-      RED -> GREEN -> BLUE -> WHITE
-    Then move to the next pin.
-    """
-    print("\n[Button / Pin Finder]")
-    print("Each pin cycles: RED → GREEN → BLUE → WHITE")
-    print("Press Ctrl+C to stop.\n")
-
-    colors = [
-        ("RED", (255, 0, 0)),
-        ("GREEN", (0, 255, 0)),
-        ("BLUE", (0, 0, 255)),
-        ("WHITE", (255, 255, 255)),
-    ]
+def attract_demo(cab):
+    """Rainbow wave on buttons 1-12, Pulsing Admin, Cycling Trackball."""
+    print("[Tester] Running Attract Mode... (Ctrl+C in console to stop)")
+    
+    def wheel(pos):
+        if pos < 85: return (pos * 3, 255 - pos * 3, 0)
+        elif pos < 170: pos -= 85; return (255 - pos * 3, 0, pos * 3)
+        else: pos -= 170; return (0, pos * 3, 255 - pos * 3)
 
     try:
-        for pin in range(1, PHYSICAL_PINS + 1):
-            idx = pin_to_index(pin)
-            for name, rgb in colors:
-                frame = [(0, 0, 0)] * PHYSICAL_PINS
-                frame[idx] = rgb
-                print(f"Pin {pin:02d} -> {name}")
-                cab.send_frame(frame)
-                time.sleep(delay_per_color)
-
-    except KeyboardInterrupt:
-        print("\nFinder stopped by user.\n")
-    finally:
-        all_off(cab)
-
-
-# ------------------------------------------------------------
-# ATTRACT / DEMO MODE
-# ------------------------------------------------------------
-def attract_demo(cab: Arcade):
-    """
-    Attract mode using physical pin mapping:
-
-    Pins:
-      1–12  : Player buttons (P1 + P2)
-      13    : REWIND
-      14    : P1_START
-      15    : MENU
-      16    : P2_START
-      17    : TRACKBALL
-    """
-    print("\n[Attract Mode]")
-    print("• Rainbow wave on player buttons (Pins 1–12)")
-    print("• Pulsing admin buttons")
-    print("• Cycling trackball (Pin 17)")
-    print("Press Ctrl+C to stop.\n")
-
-    offset = 0
-
-    try:
+        offset = 0
         while True:
-            frame = [(0, 0, 0)] * PHYSICAL_PINS
-
-            # Player buttons (Pins 1–12)
-            for pin in range(1, 13):
-                frame[pin_to_index(pin)] = wheel((pin * 20 + offset) % 255)
-
-            # Pulsing admin buttons
-            pulse = int((math.sin(time.time() * 3) + 1) * 127.5)
-            frame[pin_to_index(14)] = (pulse, 0, 0)     # P1_START
-            frame[pin_to_index(16)] = (0, 0, pulse)     # P2_START
-            frame[pin_to_index(15)] = (0, pulse, 0)     # MENU
-            frame[pin_to_index(13)] = (pulse, pulse, 0) # REWIND
-
-            # Trackball (Pin 17)
-            frame[pin_to_index(17)] = wheel((offset * 2) % 255)
-
-            cab.send_frame(frame)
-
-            offset += 2
+            # 1. Rainbow on Player Buttons (0-11)
+            for i in range(12):
+                cab.set(i, wheel((i * 20 + offset) % 255))
+            
+            # 2. Pulsing Admin (12-15)
+            # Use math.sin for the pulse effect
+            pulse = int(((math.sin(time.time() * 5) + 1) / 2) * 255)
+            for i in range(12, 16):
+                cab.set(i, (pulse, pulse, pulse))
+                
+            # 3. Cycling Trackball (16)
+            cab.set(16, wheel((offset) % 255))
+            
+            cab.show()
+            offset = (offset + 5) % 255
             time.sleep(0.03)
-
-    except KeyboardInterrupt:
-        print("\nStopping attract mode...\n")
-    finally:
-        all_off(cab)
-
-
-# ------------------------------------------------------------
-# MAIN MENU
-# ------------------------------------------------------------
-def main():
-    cab = Arcade()
-    if not getattr(cab, "ser", None):
-        print("\nERROR: Could not open serial connection.")
-        print("Check COM port, cable, and that no other app is using it.\n")
-        return
-
-    while True:
-        print("=== ARCADE HARDWARE TESTER ===")
-        print("1) Quick sanity test")
-        print("2) Button / pin finder (RGBW cycle)")
-        print("3) Attract / demo mode")
-        print("4) All off")
-        print("Q) Quit")
-        choice = input("> ").strip().lower()
-
-        if choice == "1":
-            quick_sanity_test(cab)
-        elif choice == "2":
-            button_finder(cab)
-        elif choice == "3":
-            attract_demo(cab)
-        elif choice == "4":
-            all_off(cab)
-        elif choice == "q":
-            break
-        else:
-            print("Invalid choice.\n")
-
-    all_off(cab)
-    cab.close()
-    print("Tester closed cleanly.")
-
-
-if __name__ == "__main__":
-    main()
+    except (KeyboardInterrupt, Exception):
+        print("[Tester] Attract Mode Stopped.")
+        cab.set_all((0,0,0))
+        cab.show()
