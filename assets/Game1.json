@@ -1,0 +1,22 @@
+{
+  "fx_id": "97f2213d-cfad-4f97-bc19-4be8b4dc5432",
+  "name": "DemoMode",
+  "entrance": {},
+  "main": {
+    "fx_flags": {
+      "rainbow": true,
+      "breath": false,
+      "strobe": false,
+      "fade": false
+    },
+    "speed": 1.0
+  },
+  "exit": {},
+  "audio_path": "",
+  "applied_to": [],
+  "meta": {
+    "source": "ArcadeTester.attract_demo",
+    "duration_sec": 10,
+    "note": "Rainbow on player buttons, pulsing admin, cycling trackball."
+  }
+}

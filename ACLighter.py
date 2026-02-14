@@ -7,6 +7,7 @@ import math
 import random
 import os
 from PIL import Image, ImageDraw
+from AnimationRegistry import resolve_animation
 
 # --- DEPENDENCIES ---
 try:
@@ -24,6 +25,40 @@ except ImportError:
 
 CONFIG_PORT = 6006
 LED_COUNT = 17 
+
+def normalize_color(value):
+    if value is None:
+        return None
+    if isinstance(value, (tuple, list)) and len(value) == 3:
+        try:
+            r, g, b = int(value[0]), int(value[1]), int(value[2])
+            return (r, g, b)
+        except:
+            return None
+
+    raw = str(value)
+    if "|" in raw:
+        raw = raw.split("|", 1)[0]
+    raw = raw.strip()
+
+    if raw.startswith("#") and len(raw) == 7:
+        try:
+            r = int(raw[1:3], 16)
+            g = int(raw[3:5], 16)
+            b = int(raw[5:7], 16)
+            return (r, g, b)
+        except:
+            return None
+
+    raw = raw.replace("[", "").replace("]", "").replace(" ", "")
+    parts = raw.split(",")
+    if len(parts) == 3:
+        try:
+            r = int(parts[0]); g = int(parts[1]); b = int(parts[2])
+            return (r, g, b)
+        except:
+            return None
+    return None
 
 class StateManager:
     def __init__(self):
@@ -85,13 +120,15 @@ class StateManager:
                     raw_data = package.get('data', {})
                     new_leds = {}
                     for k, v in raw_data.items():
-                        try: new_leds[k] = tuple(map(int, v.split(',')))
-                        except: pass
+                        color = normalize_color(v)
+                        if color is not None:
+                            new_leds[k] = color
                     self.current_state['leds'] = new_leds
 
                 elif cmd == 'ANIMATION':
                     self.current_state['mode'] = 'ANIMATION'
-                    self.current_state['anim_type'] = package.get('type', 'RAINBOW')
+                    anim = resolve_animation(package.get('type', 'RAINBOW')) or 'RAINBOW'
+                    self.current_state['anim_type'] = anim
                     self.current_state['phase'] = 0.0
                     print(f"[ACLighter] Started Intensity Mode: {self.current_state['anim_type']}")
         except: pass
@@ -129,6 +166,9 @@ class StateManager:
                     elif anim == "PULSE_BLUE":
                         b = int(255 * ((math.sin(phase) + 1) / 2))
                         self.driver.set_all((0, 0, b))
+                    elif anim == "PULSE_GREEN":
+                        b = int(255 * ((math.sin(phase) + 1) / 2))
+                        self.driver.set_all((0, b, 0))
 
                     # --- INTENSITY TEST 1: PLASMA ---
                     # Calculates complex sine wave interference per pixel

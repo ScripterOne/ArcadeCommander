@@ -5,7 +5,11 @@ a = Analysis(
     ['ArcadeCommander.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[
+        ('assets', 'assets'),
+        ('LICENSE.txt', '.'),
+        ('THIRD_PARTY_NOTICES.txt', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

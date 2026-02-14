@@ -1,0 +1,20 @@
+{
+  "controller_type": "ALU 2P",
+  "controller_style": "Arcade Panel",
+  "players": 2,
+  "max_players": 8,
+  "buttons_per_player": 6,
+  "sticks_per_player": 1,
+  "triggers_per_player": 0,
+  "dpad_per_player": 1,
+  "include_start": true,
+  "include_coin": false,
+  "trackball": true,
+  "spinner": false,
+  "pinball_left_flipper": false,
+  "pinball_left_nudge": false,
+  "pinball_right_flipper": false,
+  "pinball_right_nudge": false,
+  "led_enabled": true,
+  "notes": ""
+}

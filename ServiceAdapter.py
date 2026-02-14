@@ -3,8 +3,8 @@ import json
 import time
 
 # CONFIGURATION
-NEXUS_HOST = "127.0.0.1"
-NEXUS_PORT = 6006
+ACLIGHTER_HOST = "127.0.0.1"
+ACLIGHTER_PORT = 6006
 
 # --- MAPPING (Index -> Name) ---
 PIN_MAP = {
@@ -33,7 +33,7 @@ class Arcade:
 
     def reconnect(self, port=None):
         try:
-            with socket.create_connection((NEXUS_HOST, NEXUS_PORT), timeout=0.2):
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=0.2):
                 self.connected = True
                 print("[Adapter] Connected to ACLighter.")
                 return True
@@ -75,7 +75,7 @@ class Arcade:
 
     def _send_packet(self, data):
         try:
-            with socket.create_connection((NEXUS_HOST, NEXUS_PORT), timeout=0.05) as sock:
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=0.05) as sock:
                 sock.sendall(json.dumps(data).encode('utf-8'))
                 self.connected = True
         except:

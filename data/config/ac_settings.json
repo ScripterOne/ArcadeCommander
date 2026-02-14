@@ -1,0 +1,12 @@
+{
+  "port": "AC Service (Port 6006)",
+  "skip_splash": true,
+  "skip_startup_sound": true,
+  "disable_fx_preview_animation": false,
+  "disable_fx_preview_audio": false,
+  "fx_editor_video_enabled": false,
+  "fx_editor_video_audio_enabled": false,
+  "effects_enabled": true,
+  "effects_seed": 1337,
+  "effects_preset_id": "classic_static"
+}

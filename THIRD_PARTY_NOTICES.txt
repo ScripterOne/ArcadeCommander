@@ -1,0 +1,39 @@
+Third-Party Notices
+===================
+
+This document lists third-party software and components used by Arcade Commander.
+License obligations may require preserving notices and license texts in distributed copies.
+
+ACLighter
+- Purpose: Required lighting engine for Arcade Commander
+- License: TBD (confirm distribution license for packaged releases)
+- Copyright: Mark Abraham
+- Source: Internal component / companion runtime
+- Notes: Required for LED and lighting features.
+
+Pygame
+- Purpose: Audio playback and joystick integration
+- License: LGPL-2.1
+- Source: https://www.pygame.org/
+
+Pillow (PIL)
+- Purpose: Image loading and rendering utilities
+- License: HPND / PIL Software License
+- Source: https://python-pillow.org/
+
+OpenCV (cv2)
+- Purpose: Video playback support
+- License: Apache-2.0
+- Source: https://opencv.org/
+
+pystray
+- Purpose: System tray integration
+- License: MIT
+- Source: https://github.com/moses-palmer/pystray
+
+FFmpeg binaries (if distributed in assets/)
+- Purpose: Audio extraction/transcoding support
+- License: LGPL/GPL depending on build flags
+- Source: https://ffmpeg.org/
+- Notes: Verify exact binary licensing terms before redistribution.
+

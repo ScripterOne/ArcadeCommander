@@ -1,0 +1,156 @@
+{
+    "P1_A": {
+        "rel_x": 0.297,
+        "rel_y": 0.4892086330935252,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P1_B": {
+        "rel_x": 0.353,
+        "rel_y": 0.45083932853717024,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P1_C": {
+        "rel_x": 0.41,
+        "rel_y": 0.45323741007194246,
+        "rel_r": 0.025471698113207552,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P1_X": {
+        "rel_x": 0.297,
+        "rel_y": 0.3501199040767386,
+        "rel_r": 0.02552830188679246,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P1_Y": {
+        "rel_x": 0.353,
+        "rel_y": 0.3117505995203837,
+        "rel_r": 0.024641509433962264,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P1_Z": {
+        "rel_x": 0.41,
+        "rel_y": 0.31654676258992803,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_A": {
+        "rel_x": 0.809,
+        "rel_y": 0.4580335731414868,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_B": {
+        "rel_x": 0.862,
+        "rel_y": 0.4460431654676259,
+        "rel_r": 0.02358490566037736,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_C": {
+        "rel_x": 0.92,
+        "rel_y": 0.45323741007194246,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_X": {
+        "rel_x": 0.809,
+        "rel_y": 0.3213429256594724,
+        "rel_r": 0.02358490566037736,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_Y": {
+        "rel_x": 0.862,
+        "rel_y": 0.3117505995203837,
+        "rel_r": 0.024528301886792458,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "P2_Z": {
+        "rel_x": 0.916,
+        "rel_y": 0.30935251798561153,
+        "rel_r": 0.02358490566037736,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "REWIND": {
+        "rel_x": 0.379,
+        "rel_y": 0.13189448441247004,
+        "rel_r": 0.024528301886792458,
+        "label_type": "INSIDE",
+        "led_enabled": true
+    },
+    "P1_START": {
+        "rel_x": 0.459,
+        "rel_y": 0.1366906474820144,
+        "rel_r": 0.024528301886792458,
+        "label_type": "INSIDE",
+        "led_enabled": true
+    },
+    "MENU": {
+        "rel_x": 0.538,
+        "rel_y": 0.17026378896882494,
+        "rel_r": 0.02924528301886793,
+        "label_type": "INSIDE",
+        "led_enabled": true
+    },
+    "P2_START": {
+        "rel_x": 0.614,
+        "rel_y": 0.12949640287769784,
+        "rel_r": 0.025471698113207552,
+        "label_type": "INSIDE",
+        "led_enabled": true
+    },
+    "TRACKBALL": {
+        "rel_x": 0.521,
+        "rel_y": 0.6187050359712231,
+        "rel_r": 0.06415094339622643,
+        "label_type": "NONE",
+        "led_enabled": true
+    },
+    "REWIND_ALT": {
+        "rel_x": 0.27728613569321536,
+        "rel_y": 0.8537735849056604,
+        "rel_r": 0.018,
+        "label_type": "INSIDE",
+        "led_enabled": true
+    },
+    "L_FLIPPER": {
+        "rel_x": 0.12094395280235988,
+        "rel_y": 0.8278301886792453,
+        "rel_r": 0.018,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "L_NUDGE": {
+        "rel_x": 0.07374631268436578,
+        "rel_y": 0.8231132075471698,
+        "rel_r": 0.018,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "R_FLIPPER": {
+        "rel_x": 0.887905604719764,
+        "rel_y": 0.8231132075471698,
+        "rel_r": 0.018,
+        "label_type": "BELOW",
+        "led_enabled": true
+    },
+    "R_NUDGE": {
+        "rel_x": 0.9400196656833825,
+        "rel_y": 0.8231132075471698,
+        "rel_r": 0.018,
+        "label_type": "BELOW",
+        "led_enabled": true
+    }
+}
