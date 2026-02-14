@@ -238,6 +238,12 @@ ClientBin/
 *.jfm
 *.pfx
 *.publishsettings
+
+# ArcadeCommander local/build artifacts
+/build/
+/dist/
+__pycache__/
+**/__pycache__/
 orleans.codegen.cs
 
 # Including strong name files can present a security risk
