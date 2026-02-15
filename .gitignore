@@ -242,6 +242,9 @@ ClientBin/
 # ArcadeCommander local/build artifacts
 /build/
 /dist/
+/build-linux/
+/dist-linux/
+/.venv-linux/
 __pycache__/
 **/__pycache__/
 orleans.codegen.cs
