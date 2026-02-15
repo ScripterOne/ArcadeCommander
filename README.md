@@ -47,4 +47,5 @@ Expected release artifacts after PyInstaller build:
 
 - Use `RELEASE_2.0.md` for full release notes and change summary.
 - Use `docs/USER_MANUAL_V2.md` for the comprehensive operator manual.
+- Use `docs/WEBSITE_ADVERTISEMENT.md` for website and launch marketing copy.
 - This repository is intended to keep all three components in sync for each tagged release.

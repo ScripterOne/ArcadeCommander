@@ -1,136 +1,796 @@
 {\rtf1\ansi\deff0
 {\fonttbl{\f0 Segoe UI;}{\f1 Consolas;}}
-\viewkind4\uc1\pard\sa120\sl276\slmult1\f0\fs34\b Arcade Commander 2.0 User Manual\b0\fs22\par
-\pard\sa120\sl276\slmult1\f0\fs22 Version 2.0 Release Package\par
+\viewkind4\uc1\pard\sa120\sl276\slmult1\f0\fs22
+\pard\sa120\sl276\slmult1\f0\fs34\b Arcade Commander 2.0 User Manual\b0\fs22\par
 \par
-\b 1. Suite Overview\b0\par
-Arcade Commander 2.0 ships as a 3-component Windows suite:\par
-- ArcadeCommanderV2.exe (main UI)\par
-- ACLighter.exe (background lighting service/tray app)\par
-- ACDispatch.exe (dispatcher CLI for event automation)\par
+Version: 2.0\par
+Release Channel: ALPHA (Pre-Release)\par
+Primary Application: `ArcadeCommanderV2.exe`\par
+Companion Services: `ACLighter.exe`, `ACDispatch.exe`\par
 \par
-[SCREENSHOT PLACEHOLDER 01: Full app window showing all tabs]\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 0. How to Use This Manual\b0\fs22\par
 \par
-\b 2. Installation and Startup Order\b0\par
-Recommended launch order:\par
-1) Start ACLighter.exe\par
-2) Start ArcadeCommanderV2.exe\par
-3) Use ACDispatch.exe for automation/testing\par
+This manual is written for cabinet builders, operators, and integrators who need full control of Arcade Commander 2.0.\par
 \par
-Runtime communication endpoint: 127.0.0.1:6006\par
+Read order recommendation:\par
 \par
-[SCREENSHOT PLACEHOLDER 02: ACLighter tray icon/menu]\par
+1. Section 1 (`Suite and Architecture`) for system model.\par
+2. Section 2 (`Installation and Startup`) for clean setup.\par
+3. Section 3 (`Operator Quick Start`) to verify end-to-end flow.\par
+4. Section 4 through Section 8 for deep operations by tab/component.\par
+5. Section 11 (`Troubleshooting`) when behavior is unexpected.\par
 \par
-\b 3. Runtime Data Locations\b0\par
-All runtime files are stored in the data folder:\par
-- data\\config\\ac_settings.json\par
-- data\\config\\controller_config.json\par
-- data\\config\\last_profile.cfg\par
-- data\\games\\AC_GameData.json\par
-- data\\library\\AC_FXLibrary.json\par
-- data\\library\\AC_AnimationLibrary.json\par
-- data\\profiles\\*.json\par
-- data\\keymaps\\*.json\par
+If you are integrating with a frontend launcher, read Section 8 (`ACDispatch Automation`) before production use.\par
 \par
-[SCREENSHOT PLACEHOLDER 03: Explorer view of data folder tree]\par
+[GRAPHIC PLACEHOLDER G-00: Manual Navigation Map]\par
+- Purpose: Show readers where each part of the workflow lives in this document.\par
+- Required image: One-page flow map with blocks for Setup, Authoring, Mapping, Validation, Automation.\par
+- Annotation notes: Label each block with the matching section number.\par
+- Suggested output: `docs/images/G-00-manual-navigation-map.png`.\par
 \par
-\b 4. Tab Reference\b0\par
-\b ARCADE COMMANDER\b0\par
-Primary live control workspace. Includes the bottom utility bar controls:\par
-APPLY, ALL OFF, BTN TEST, SWAP FIGHT, SWAP START, LED TEST, CYCLE, DEMO, PORT, ABOUT, HELP, QUIT\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 1. Suite and Architecture\b0\fs22\par
 \par
-[SCREENSHOT PLACEHOLDER 04: Commander tab with utility bar highlighted]\par
+Arcade Commander 2.0 is a 3-component Windows suite:\par
 \par
-\b EMULATOR\b0\par
-Use for visual validation of mappings and active effects/animations before or alongside hardware validation.\par
+- `ArcadeCommanderV2.exe`: operator UI and workflow host.\par
+- `ACLighter.exe`: local runtime lighting service/tray app.\par
+- `ACDispatch.exe`: command/event dispatcher used by scripts and frontend hooks.\par
 \par
-[SCREENSHOT PLACEHOLDER 05: Emulator tab showing loaded effect]\par
+All components share runtime data under `data/` and communicate locally over loopback networking.\par
 \par
-\b GAME MANAGER\b0\par
-Use to create/edit game entries, assign maps, and attach FX/event behavior.\par
-Main game database file: data\\games\\AC_GameData.json\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 1.1 Component Responsibilities\b0\par
 \par
-[SCREENSHOT PLACEHOLDER 06: Game Manager with selected game + assignments]\par
+`ArcadeCommanderV2.exe`:\par
 \par
-\b FX EDITOR\b0\par
-Use for authoring and previewing effects/animations, then saving to shared libraries.\par
-Important: ALL OFF is available here for immediate blackout/reset.\par
+- User-facing control plane.\par
+- Owns Commander, Emulator, Game Manager, FX Editor, and Controller Config tabs.\par
+- Loads and saves profiles, game records, and shared FX/animation libraries.\par
 \par
-[SCREENSHOT PLACEHOLDER 07: FX Editor controls + preview area]\par
+`ACLighter.exe`:\par
 \par
-\b CONTROLLER CONFIG\b0\par
-Set controller hardware profile, app settings, and future enhancements card content.\par
+- Runtime apply engine for live lighting behavior.\par
+- Exposes local listener endpoint used by Commander and Dispatch.\par
+- Provides tray-level stress/test/reset actions.\par
 \par
-[SCREENSHOT PLACEHOLDER 08: Controller Config tab + Future Enhancements card]\par
+`ACDispatch.exe`:\par
 \par
-\b 5. Shared Effects and Animation Catalog\b0\par
-Shared library files:\par
-- data\\library\\AC_FXLibrary.json\par
-- data\\library\\AC_AnimationLibrary.json\par
+- External trigger path for game events and automation.\par
+- Supports idle reset, event signaling, animation forcing, and ROM-driven mapping loads.\par
 \par
-Effects engine presets include:\par
-showroom_default, classic_static, neon_minimal, party_mode, tease\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 1.2 Runtime Communication Model\b0\par
 \par
-Expected behavior: saved effects/animations are visible across Commander, Emulator, and FX Editor selectors.\par
+Default local endpoint:\par
 \par
-[SCREENSHOT PLACEHOLDER 09: Same effect shown in multiple tab dropdowns]\par
+- Host: `127.0.0.1`\par
+- Port: `6006`\par
 \par
-\b 6. ACLighter Operations\b0\par
-ACLighter listens on 127.0.0.1:6006 and accepts state/animation commands.\par
-Tray menu options:\par
-- STRESS: Plasma\par
-- STRESS: Hyper Strobe\par
-- Test: Rainbow\par
-- Reset (Off)\par
-- Exit\par
+Expected flow:\par
 \par
-[SCREENSHOT PLACEHOLDER 10: ACLighter tray menu commands]\par
+1. Operator configures behavior in Commander UI.\par
+2. UI writes/reads runtime JSON data under `data/`.\par
+3. UI and ACDispatch send runtime packets to ACLighter.\par
+4. ACLighter applies effect and animation output to configured hardware path.\par
 \par
-\b 7. ACDispatch CLI Quick Reference\b0\par
-\f1 ACDispatch.exe\f0  (send idle reset)\par
-\f1 ACDispatch.exe --anim RAINBOW\f0  (trigger animation)\par
-\f1 ACDispatch.exe --event GAME_START <rom_name>\f0  (trigger event mapping)\par
-\f1 ACDispatch.exe <rom_name>\f0  (load game profile behavior)\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 1.3 Shared Catalog Model\b0\par
 \par
-Supported event family:\par
-FE_START, FE_QUIT, SCREENSAVER_START, SCREENSAVER_STOP, LIST_CHANGE, GAME_START, GAME_QUIT, GAME_PAUSE, AUDIO_ANIMATION, SPEAK_CONTROLS, DEFAULT\par
+Effects and animations are designed as shared catalogs.\par
+A saved entry in FX Editor should be available from Commander and Emulator selectors.\par
 \par
-[SCREENSHOT PLACEHOLDER 11: Terminal with ACDispatch examples]\par
+Shared files:\par
 \par
-\b 8. Troubleshooting\b0\par
-\b No lighting response\b0\par
-- Confirm ACLighter is running\par
-- Confirm port 6006 is available\par
-- Confirm correct PORT selection in Commander\par
-- Use ALL OFF then APPLY to force state refresh\par
+- Effects: `data/library/AC_FXLibrary.json`\par
+- Animations: `data/library/AC_AnimationLibrary.json`\par
 \par
-\b Effect visible in FX Editor but missing elsewhere\b0\par
-- Confirm save to shared library files in data\\library\par
-- Reload selector/app and verify entry format\par
+[GRAPHIC PLACEHOLDER G-01: Suite Architecture Diagram]\par
+- Purpose: Explain data/control boundaries between the three executables.\par
+- Required image: Diagram with 3 app boxes, loopback socket, and `data/` folder.\par
+- Must show labels: Commander UI, ACLighter Service, ACDispatch CLI, `127.0.0.1:6006`.\par
+- Annotation notes: Arrow direction for command flow and data persistence flow.\par
+- Suggested output: `docs/images/G-01-suite-architecture.png`.\par
 \par
-\b Preview works but hardware does not\b0\par
-- Confirm ACLighter listener active\par
-- Validate physical hardware path\par
-- Run LED TEST and BTN TEST\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 2. Installation and Startup\b0\fs22\par
 \par
-[SCREENSHOT PLACEHOLDER 12: Example troubleshooting panel or warning dialog]\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 2.1 System Requirements\b0\par
 \par
-\b 9. Release Checklist\b0\par
-- ArcadeCommanderV2.exe built\par
-- ACLighter.exe built\par
-- ACDispatch.exe built\par
-- Shared effect lists verified across tabs\par
-- ALL OFF verified in Commander and FX Editor\par
-- Tease preset visible in shared preset-enabled locations\par
-- Game map save/load verified\par
-- ACDispatch event simulation verified\par
+- Windows 10 or Windows 11 (64-bit recommended).\par
+- Cabinet LED/controller hardware connected and recognized by system.\par
+- Loopback networking enabled (`127.0.0.1`).\par
+- If running from source: Python runtime and project dependencies installed.\par
 \par
-\b 10. Notes for Documentation Editor\b0\par
-You can replace each [SCREENSHOT PLACEHOLDER ##] line with an inserted image in Word while preserving this structure.\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 2.2 Release Package Contents\b0\par
 \par
-Source docs in repo:\par
-- README.md\par
-- RELEASE_2.0.md\par
-- README_EFFECTS.md\par
-- docs\\USER_MANUAL_V2.md\par
+Expected packaged outputs:\par
+\par
+- `dist/ArcadeCommanderV2/ArcadeCommanderV2.exe`\par
+- `dist/ACLighter.exe`\par
+- `dist/ACDispatch.exe`\par
+\par
+Documentation files expected in release bundle:\par
+\par
+- `README.md`\par
+- `RELEASE_2.0.md`\par
+- `README_EFFECTS.md`\par
+- `docs/USER_MANUAL_V2.md`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 2.3 First-Run Startup Order (Recommended)\b0\par
+\par
+1. Start `ACLighter.exe` first.\par
+2. Start `ArcadeCommanderV2.exe` second.\par
+3. Use `ACDispatch.exe` for automation checks after both are up.\par
+\par
+Why this order matters:\par
+\par
+- Commander and Dispatch depend on ACLighter listener availability.\par
+- Starting service first avoids connection timing issues during initial apply/load actions.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 2.4 Shutdown Order\b0\par
+\par
+1. Stop external automation scripts (if active).\par
+2. Close `ArcadeCommanderV2.exe`.\par
+3. Exit `ACLighter.exe` from tray menu.\par
+\par
+[GRAPHIC PLACEHOLDER G-02: Startup Order Visual]\par
+- Purpose: Show exact launch/shutdown sequence.\par
+- Required image: Numbered sequence graphic with start and stop order.\par
+- Must show executable names exactly as shipped.\par
+- Annotation notes: Add "required" marker on ACLighter-first startup.\par
+- Suggested output: `docs/images/G-02-startup-sequence.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 3. Operator Quick Start (5-10 Minutes)\b0\fs22\par
+\par
+Use this sequence for first functional validation.\par
+\par
+1. Launch `ACLighter.exe`.\par
+2. Launch `ArcadeCommanderV2.exe`.\par
+3. Open `CONTROLLER CONFIG` and confirm controller profile.\par
+4. Open `ARCADE COMMANDER` and set visible test colors/effect.\par
+5. Press `APPLY`.\par
+6. Run `LED TEST` and `BTN TEST`.\par
+7. Open `EMULATOR` and confirm visual parity.\par
+8. Optional dispatch test:\par
+   - `ACDispatch.exe --anim RAINBOW`\par
+\par
+Expected result:\par
+\par
+- Hardware responds to apply/test commands.\par
+- Emulator behavior matches expected active effect routing.\par
+\par
+If not, go to Section 11 (`Troubleshooting`).\par
+\par
+[GRAPHIC PLACEHOLDER G-03: First Successful Apply]\par
+- Purpose: Show user what a "good" first-run state looks like.\par
+- Required image: Commander tab with color/effect chosen and apply confirmation context.\par
+- Must show: Utility bar, current profile/game area, active selection state.\par
+- Annotation notes: Circle `APPLY`, `LED TEST`, and `ALL OFF`.\par
+- Suggested output: `docs/images/G-03-first-apply.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 4. Runtime Data Layout and File Behavior\b0\fs22\par
+\par
+V2 runtime files are centralized under `data/`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 4.1 Key Paths\b0\par
+\par
+- `data/config/ac_settings.json`\par
+- `data/config/controller_config.json`\par
+- `data/config/last_profile.cfg`\par
+- `data/games/AC_GameData.json`\par
+- `data/library/AC_FXLibrary.json`\par
+- `data/library/AC_AnimationLibrary.json`\par
+- `data/profiles/*.json`\par
+- `data/keymaps/*.json`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 4.2 File Role Reference\b0\par
+\par
+`ac_settings.json`:\par
+\par
+- App-level preferences and startup behavior.\par
+\par
+`controller_config.json`:\par
+\par
+- Cabinet control deck and hardware profile definition.\par
+\par
+`last_profile.cfg`:\par
+\par
+- Pointer to most recently loaded profile/context.\par
+\par
+`AC_GameData.json`:\par
+\par
+- Game-centric mapping, profile, and FX/event behavior assignments.\par
+\par
+`AC_FXLibrary.json` and `AC_AnimationLibrary.json`:\par
+\par
+- Shared catalog entries used across tabs.\par
+\par
+`profiles/*.json` and `keymaps/*.json`:\par
+\par
+- Reusable profile and control mapping data artifacts.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 4.3 Migration Behavior\b0\par
+\par
+V2 includes legacy migration logic that can move root-level runtime files into the `data/` structure at startup.\par
+\par
+Operational recommendation:\par
+\par
+- Before first V2 run on an upgraded environment, back up old runtime files.\par
+- Verify migrated data in each `data/` subfolder before editing further.\par
+\par
+[GRAPHIC PLACEHOLDER G-04: Runtime Folder Tree]\par
+- Purpose: Make runtime storage expectations explicit.\par
+- Required image: Windows Explorer tree expanded to all `data/` subfolders.\par
+- Must show complete path and all key files from Section 4.1.\par
+- Annotation notes: Highlight `games`, `library`, and `config` folders.\par
+- Suggested output: `docs/images/G-04-runtime-tree.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 5. Detailed Tab Guide\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 5.1 ARCADE COMMANDER Tab\b0\fs22\par
+\par
+Role:\par
+\par
+- Primary live-control workspace.\par
+\par
+Common operator actions:\par
+\par
+- Load a profile or game context.\par
+- Set player/system colors.\par
+- Select effect/animation behavior.\par
+- Apply changes to active runtime path.\par
+\par
+Bottom utility bar controls:\par
+\par
+- `APPLY`: Push current selections to runtime output path.\par
+- `ALL OFF`: Immediate blackout/reset state.\par
+- `BTN TEST`: Verify button mapping and response.\par
+- `SWAP FIGHT`: Swap fight button mapping orientation.\par
+- `SWAP START`: Swap start/select orientation as configured.\par
+- `LED TEST`: Validate output channels and color path.\par
+- `CYCLE`: Iterate through test modes/colors.\par
+- `DEMO`: Trigger a demonstration sequence.\par
+- `PORT`: Change/select output port path.\par
+- `ABOUT`: Build/version/license info dialog.\par
+- `HELP`: Open help/manual resources.\par
+- `QUIT`: Close application.\par
+\par
+Safe operating notes:\par
+\par
+- Use `ALL OFF` before profile switching if prior state persists unexpectedly.\par
+- Use `APPLY` after meaningful edits; do not assume auto-apply.\par
+\par
+[GRAPHIC PLACEHOLDER G-05: Commander Tab Annotated]\par
+- Purpose: Identify all live controls used in normal operation.\par
+- Required image: Full Commander tab at normal desktop scaling.\par
+- Must show: main selection widgets and complete bottom utility bar.\par
+- Annotation notes: Number every utility control left-to-right.\par
+- Suggested output: `docs/images/G-05-commander-annotated.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 5.2 EMULATOR Tab\b0\par
+\par
+Role:\par
+\par
+- Visual validation of layout, mappings, and selected effects/animations.\par
+\par
+Use cases:\par
+\par
+- Validate mapping before hardware confirmation.\par
+- Compare behavior changes after effect edits.\par
+- Reproduce non-hardware issues for debugging.\par
+\par
+Validation workflow:\par
+\par
+1. Load or assign target game/profile.\par
+2. Apply effect from Commander or FX path.\par
+3. Confirm emulator state reflects current selection.\par
+4. Cross-check with hardware output when needed.\par
+\par
+[GRAPHIC PLACEHOLDER G-06: Emulator Validation View]\par
+- Purpose: Show where to check parity between assigned behavior and preview.\par
+- Required image: Emulator tab with active game/effect loaded.\par
+- Must show: visible controls plus current preview state.\par
+- Annotation notes: Call out the values that must match Commander state.\par
+- Suggested output: `docs/images/G-06-emulator-validation.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 5.3 GAME MANAGER Tab\b0\par
+\par
+Role:\par
+\par
+- Per-game assignment and persistence management.\par
+\par
+Typical tasks:\par
+\par
+- Create or select game entries.\par
+- Attach keymaps and profile behavior.\par
+- Assign FX and event mappings.\par
+- Save/import/export game data.\par
+\par
+Source-of-truth file:\par
+\par
+- `data/games/AC_GameData.json`\par
+\par
+Data handling recommendations:\par
+\par
+- Keep consistent ROM naming in records and dispatch calls.\par
+- After bulk edits, restart selector views to verify loaded state.\par
+- Validate one known game end-to-end before mass assignment.\par
+\par
+[GRAPHIC PLACEHOLDER G-07: Game Manager Record Editing]\par
+- Purpose: Show all fields required to make a valid game assignment.\par
+- Required image: Game Manager with one selected record and assigned map/FX.\par
+- Must show: game ID/name field, mapping selectors, save action area.\par
+- Annotation notes: Highlight minimum required fields for successful dispatch mapping.\par
+- Suggested output: `docs/images/G-07-game-manager-record.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 5.4 FX EDITOR Tab\b0\par
+\par
+Role:\par
+\par
+- Authoring and preview environment for effects and animations.\par
+\par
+Core workflow:\par
+\par
+1. Create or load effect definition.\par
+2. Adjust modulation/timing/color parameters.\par
+3. Preview locally.\par
+4. Save to shared libraries.\par
+5. Verify visibility from Commander and Emulator selectors.\par
+\par
+Critical control:\par
+\par
+- `ALL OFF` provides immediate blackout/reset inside FX workflow.\par
+\par
+Shared-catalog expectation:\par
+\par
+- A saved entry should propagate to all tabs that consume shared catalogs.\par
+\par
+[GRAPHIC PLACEHOLDER G-08: FX Editor Authoring Flow]\par
+- Purpose: Show the exact edit-preview-save sequence.\par
+- Required image: FX Editor with parameter controls and preview pane visible.\par
+- Must show: load/save controls and live preview area at the same time.\par
+- Annotation notes: Mark the "save to shared library" action point.\par
+- Suggested output: `docs/images/G-08-fx-editor-flow.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 5.5 CONTROLLER CONFIG Tab\b0\par
+\par
+Role:\par
+\par
+- Hardware/deck profile and app behavior configuration.\par
+\par
+Expected configuration areas:\par
+\par
+- Deck style and player count.\par
+- Button/stick/trigger/extras definitions.\par
+- App startup/default behavior values.\par
+- Summary panel and planned feature card.\par
+\par
+Operational recommendation:\par
+\par
+- Complete Controller Config before deep game/effect assignment work.\par
+\par
+[GRAPHIC PLACEHOLDER G-09: Controller Config Fields]\par
+- Purpose: Document every field that affects runtime mapping.\par
+- Required image: Controller Config tab with all major groups expanded/visible.\par
+- Must show: deck options, player count, and app setting values.\par
+- Annotation notes: Tag fields that require restart/reload after change.\par
+- Suggested output: `docs/images/G-09-controller-config.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 6. Effects, Presets, and Shared Catalog Behavior\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 6.1 Shared Libraries\b0\par
+\par
+- Effects: `data/library/AC_FXLibrary.json`\par
+- Animations: `data/library/AC_AnimationLibrary.json`\par
+\par
+These files are shared across Commander, Emulator, and FX Editor.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 6.2 Included Preset Set\b0\par
+\par
+Current preset family includes:\par
+\par
+- `showroom_default`\par
+- `classic_static`\par
+- `neon_minimal`\par
+- `party_mode`\par
+- `tease`\par
+\par
+Preset note:\par
+\par
+- `tease` is a slow pulsing multi-phase cycle and should be visible where shared preset loading is supported.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 6.3 Catalog Consistency Checks\b0\par
+\par
+After creating or editing entries:\par
+\par
+1. Save in FX Editor.\par
+2. Re-open selection list in Commander.\par
+3. Re-open selection list in Emulator.\par
+4. Confirm same entry appears in all selectors.\par
+\par
+If not consistent, inspect Section 11.2.\par
+\par
+[GRAPHIC PLACEHOLDER G-10: Shared Catalog Cross-Tab Verification]\par
+- Purpose: Prove shared library synchronization behavior.\par
+- Required image: Three cropped callouts from Commander, Emulator, FX Editor showing same entry.\par
+- Must show identical effect/animation name in all three views.\par
+- Annotation notes: Include one red marker where mismatch would appear.\par
+- Suggested output: `docs/images/G-10-shared-catalog-parity.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 7. ACLighter Service Operations\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 7.1 Service Role\b0\par
+\par
+`ACLighter.exe` hosts runtime apply logic and listens for local commands.\par
+\par
+Default listener:\par
+\par
+- Host: `127.0.0.1`\par
+- Port: `6006`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 7.2 Tray Menu Reference\b0\par
+\par
+- `STRESS: Plasma`\par
+- `STRESS: Hyper Strobe`\par
+- `Test: Rainbow`\par
+- `Reset (Off)`\par
+- `Exit`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 7.3 Service Verification Routine\b0\par
+\par
+1. Start ACLighter.\par
+2. Confirm tray icon is active.\par
+3. Use `Test: Rainbow`.\par
+4. Trigger apply from Commander.\par
+5. Send one dispatch event.\par
+\par
+Expected result:\par
+\par
+- All three control paths (tray, UI, dispatch) produce response.\par
+\par
+[GRAPHIC PLACEHOLDER G-11: ACLighter Tray Operations]\par
+- Purpose: Show operators the exact tray actions and expected order.\par
+- Required image: Open tray menu with all commands visible.\par
+- Must show: menu text exactly as released.\par
+- Annotation notes: Add arrows for safe test order (`Rainbow` then `Reset (Off)`).\par
+- Suggested output: `docs/images/G-11-aclighter-tray.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 8. ACDispatch Automation\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 8.1 Command Patterns\b0\par
+\par
+Idle reset:\par
+\par
+- `ACDispatch.exe`\par
+\par
+Trigger animation:\par
+\par
+- `ACDispatch.exe --anim RAINBOW`\par
+\par
+Trigger event mapping:\par
+\par
+- `ACDispatch.exe --event GAME_START <rom_name>`\par
+\par
+Load game profile behavior:\par
+\par
+- `ACDispatch.exe <rom_name>`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 8.2 Supported Event Family\b0\par
+\par
+- `FE_START`\par
+- `FE_QUIT`\par
+- `SCREENSAVER_START`\par
+- `SCREENSAVER_STOP`\par
+- `LIST_CHANGE`\par
+- `GAME_START`\par
+- `GAME_QUIT`\par
+- `GAME_PAUSE`\par
+- `AUDIO_ANIMATION`\par
+- `SPEAK_CONTROLS`\par
+- `DEFAULT`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 8.3 Frontend Integration Guidance\b0\par
+\par
+Use dispatch calls from frontend hooks to keep lighting state synchronized with UX state transitions.\par
+\par
+Typical mapping strategy:\par
+\par
+1. Send `FE_START` when frontend launches.\par
+2. Send `LIST_CHANGE` during browsing transitions.\par
+3. Send `GAME_START <rom_name>` at launch.\par
+4. Send `GAME_QUIT <rom_name>` when title exits.\par
+5. Send `FE_QUIT` during frontend shutdown.\par
+\par
+Validation rule:\par
+\par
+- Every frontend event path should be tested with at least one known ROM mapping before production rollout.\par
+\par
+[GRAPHIC PLACEHOLDER G-12: Dispatch CLI Examples]\par
+- Purpose: Provide exact terminal syntax examples for integrators.\par
+- Required image: Terminal window with successful command examples and outputs.\par
+- Must show at least one `--anim`, one `--event`, and one ROM-name invocation.\par
+- Annotation notes: Highlight argument positions and required token case.\par
+- Suggested output: `docs/images/G-12-acdispatch-cli.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 9. Backup, Restore, and Change Management\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 9.1 Backup Scope (Before Major Changes)\b0\par
+\par
+Back up these paths together:\par
+\par
+- `data/games/AC_GameData.json`\par
+- `data/library/AC_FXLibrary.json`\par
+- `data/library/AC_AnimationLibrary.json`\par
+- `data/profiles/`\par
+- `data/keymaps/`\par
+- `data/config/`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 9.2 Snapshot Strategy\b0\par
+\par
+Recommended snapshot label format:\par
+\par
+- `AC2_<YYYY-MM-DD>_<environment>_<note>`\par
+\par
+Examples:\par
+\par
+- `AC2_2026-02-15_ArcadeCab_A_PreUpdate`\par
+- `AC2_2026-02-15_ArcadeCab_A_PostTune`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 9.3 Restore Procedure (High Level)\b0\par
+\par
+1. Stop Commander and ACLighter.\par
+2. Replace `data/` contents from snapshot.\par
+3. Restart ACLighter, then Commander.\par
+4. Validate one known game and one known effect.\par
+\par
+[GRAPHIC PLACEHOLDER G-13: Backup Folder Example]\par
+- Purpose: Standardize backup packaging so restores are repeatable.\par
+- Required image: Explorer view of timestamped backup folder structure.\par
+- Must show all required files/folders from Section 9.1.\par
+- Annotation notes: Mark required vs optional archive content.\par
+- Suggested output: `docs/images/G-13-backup-structure.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 10. Validation and Release Readiness Checklist\b0\fs22\par
+\par
+Use this checklist before shipping or cabinet handoff.\par
+\par
+Build/runtime checks:\par
+\par
+- `ArcadeCommanderV2.exe` build present.\par
+- `ACLighter.exe` build present.\par
+- `ACDispatch.exe` build present.\par
+\par
+Functional checks:\par
+\par
+- All tabs open and render correctly.\par
+- `ALL OFF` verified in Commander and FX Editor.\par
+- Shared catalog entries visible in Commander, Emulator, and FX Editor.\par
+- `tease` preset visible where shared preset loading applies.\par
+- Game map save/load verified.\par
+- ACLighter tray commands verified.\par
+- ACDispatch event simulation verified.\par
+\par
+Package checks:\par
+\par
+- README and release notes included.\par
+- Manual included and current.\par
+- Runtime `data/` schema verified for expected files.\par
+\par
+[GRAPHIC PLACEHOLDER G-14: Release Checklist Completion Sheet]\par
+- Purpose: Provide signoff artifact for deployment.\par
+- Required image: Completed checklist template with initials/date.\par
+- Must show pass/fail status for each major subsystem.\par
+- Annotation notes: Include escalation owner field for failed checks.\par
+- Suggested output: `docs/images/G-14-release-checklist.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 11. Troubleshooting Guide\b0\fs22\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 11.1 No Lighting Response\b0\par
+\par
+Symptoms:\par
+\par
+- No visible LED output after apply or tests.\par
+\par
+Likely causes:\par
+\par
+- ACLighter not running.\par
+- Port/path mismatch.\par
+- Hardware path disconnected.\par
+\par
+Actions:\par
+\par
+1. Confirm ACLighter tray icon exists.\par
+2. Verify listener path and selected port.\par
+3. Run `ALL OFF` then `APPLY`.\par
+4. Run `LED TEST` and `BTN TEST`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 11.2 Effect Exists in FX Editor but Missing Elsewhere\b0\par
+\par
+Symptoms:\par
+\par
+- Effect appears in FX Editor but not Commander/Emulator selectors.\par
+\par
+Likely causes:\par
+\par
+- Save did not persist to shared library.\par
+- Selector cache not refreshed.\par
+- Entry format inconsistent.\par
+\par
+Actions:\par
+\par
+1. Verify entry exists in `data/library/AC_FXLibrary.json` or animation file.\par
+2. Reload selectors or restart app.\par
+3. Re-save using shared library path.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 11.3 Preview Works but Hardware Does Not\b0\par
+\par
+Symptoms:\par
+\par
+- Emulator/preview updates but cabinet LEDs do not.\par
+\par
+Likely causes:\par
+\par
+- ACLighter listener path unavailable.\par
+- Hardware transport failure.\par
+- Port selection mismatch.\par
+\par
+Actions:\par
+\par
+1. Confirm ACLighter active state.\par
+2. Validate physical connections.\par
+3. Run hardware-side diagnostics via `LED TEST`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 11.4 Automation Events Not Triggering\b0\par
+\par
+Symptoms:\par
+\par
+- ACDispatch command executes but expected behavior is missing.\par
+\par
+Likely causes:\par
+\par
+- Wrong event name or argument format.\par
+- ROM name mismatch with `AC_GameData.json` record.\par
+- Missing event assignment in game map.\par
+\par
+Actions:\par
+\par
+1. Re-run command with known-good syntax.\par
+2. Confirm ROM key in game DB.\par
+3. Confirm event mapping exists and references valid effect/animation.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 11.5 Escalation Capture Pack\b0\par
+\par
+When escalating, capture and attach:\par
+\par
+- Exact command used.\par
+- Screenshot of UI state.\par
+- Relevant JSON snippet from `data/games` or `data/library`.\par
+- Build versions and environment notes.\par
+\par
+[GRAPHIC PLACEHOLDER G-15: Troubleshooting Decision Tree]\par
+- Purpose: Speed root-cause isolation for field issues.\par
+- Required image: Decision tree from symptom to corrective action.\par
+- Must include branches for service, data, mapping, and hardware.\par
+- Annotation notes: Add priority marker on fastest high-confidence checks.\par
+- Suggested output: `docs/images/G-15-troubleshooting-tree.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 12. Graphics Production Shot List (All Placeholders)\b0\fs22\par
+\par
+Use this section as the master specification for documentation screenshots/graphics.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 12.1 Capture Standards\b0\par
+\par
+- Format: PNG for screenshots/diagrams.\par
+- Recommended width: 1920 px (or 1600 px minimum).\par
+- Scale: 100% UI scale whenever possible.\par
+- Theme: Keep visual theme consistent across all captures.\par
+- Annotation style: Use numbered callouts with short labels.\par
+- File naming: `G-XX-short-description.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs22\b 12.2 Placeholder Index\b0\par
+\par
+`G-00`:\par
+\par
+- Title: Manual Navigation Map.\par
+- Required content: End-to-end workflow map aligned to section numbers.\par
+\par
+`G-01`:\par
+\par
+- Title: Suite Architecture Diagram.\par
+- Required content: Commander, ACLighter, ACDispatch, `data/`, and socket link.\par
+\par
+`G-02`:\par
+\par
+- Title: Startup Order Visual.\par
+- Required content: Launch and shutdown order with dependency markers.\par
+\par
+`G-03`:\par
+\par
+- Title: First Successful Apply.\par
+- Required content: Commander with active selection and utility controls visible.\par
+\par
+`G-04`:\par
+\par
+- Title: Runtime Folder Tree.\par
+- Required content: Explorer view with `data` subfolders and key JSON files.\par
+\par
+`G-05`:\par
+\par
+- Title: Commander Tab Annotated.\par
+- Required content: Full Commander screen with numbered utility controls.\par
+\par
+`G-06`:\par
+\par
+- Title: Emulator Validation View.\par
+- Required content: Emulator screen showing loaded state to compare with Commander.\par
+\par
+`G-07`:\par
+\par
+- Title: Game Manager Record Editing.\par
+- Required content: Game record fields plus mapping/FX assignments.\par
+\par
+`G-08`:\par
+\par
+- Title: FX Editor Authoring Flow.\par
+- Required content: Parameter controls, preview area, and save action.\par
+\par
+`G-09`:\par
+\par
+- Title: Controller Config Fields.\par
+- Required content: Deck profile settings and app settings in one capture.\par
+\par
+`G-10`:\par
+\par
+- Title: Shared Catalog Cross-Tab Verification.\par
+- Required content: Same effect visible across Commander, Emulator, and FX Editor.\par
+\par
+`G-11`:\par
+\par
+- Title: ACLighter Tray Operations.\par
+- Required content: Full tray menu with stress/test/reset options.\par
+\par
+`G-12`:\par
+\par
+- Title: Dispatch CLI Examples.\par
+- Required content: Valid command invocations with visible outputs.\par
+\par
+`G-13`:\par
+\par
+- Title: Backup Folder Example.\par
+- Required content: Snapshot folder layout with dated naming convention.\par
+\par
+`G-14`:\par
+\par
+- Title: Release Checklist Completion Sheet.\par
+- Required content: Completed checklist with signoff status.\par
+\par
+`G-15`:\par
+\par
+- Title: Troubleshooting Decision Tree.\par
+- Required content: Symptom-driven diagnosis flow.\par
+\par
+`G-16`:\par
+\par
+- Title: "Known Good" End State Panel.\par
+- Required content: Combined collage of service running, profile loaded, and dispatch success.\par
+\par
+[GRAPHIC PLACEHOLDER G-16: Known Good End State]\par
+- Purpose: Define the final target state for acceptance testing.\par
+- Required image: 3-panel collage (Commander, ACLighter tray, CLI test success).\par
+- Must show: consistent profile/effect naming across all panels.\par
+- Annotation notes: Include date/time/build labels on each panel.\par
+- Suggested output: `docs/images/G-16-known-good-state.png`.\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 13. Support References\b0\fs22\par
+\par
+- Release summary: `RELEASE_2.0.md`\par
+- Effects engine notes: `README_EFFECTS.md`\par
+- Primary repository notes: `README.md`\par
+- This manual: `docs/USER_MANUAL_V2.md`\par
+\par
+\pard\sa120\sl276\slmult1\f0\fs26\b 14. Document Maintenance Notes\b0\fs22\par
+\par
+When updating this manual:\par
+\par
+1. Keep command syntax examples in sync with executable behavior.\par
+2. Keep event family list synchronized with ACDispatch.\par
+3. Keep runtime file path references synchronized with `app_paths.py` behavior.\par
+4. Update placeholder descriptions if UI labels/layout change.\par
+5. Date-stamp major manual edits in release notes.\par
 }
