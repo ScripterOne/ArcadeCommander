@@ -4,6 +4,7 @@ from tkinter import messagebox
 from PIL import Image, ImageTk
 import json
 import os
+import sys
 
 BUTTON_IDS = [
     "P1_A", "P1_B", "P1_C", "P1_X", "P1_Y", "P1_Z",
@@ -13,9 +14,36 @@ BUTTON_IDS = [
 ]
 
 TEMPLATES = {
-    "ALU": {"image": "Consol.png", "layout": "layout.json"},
-    "4P": {"image": "4PlayerDeck.jpg", "layout": "layout_4p.json"},
+    "ALU": {"images": ["Consol.png", "Console.png", "console.png"], "layout": "layout.json"},
+    "4P": {"images": ["4PlayerDeck.jpg", "4PlayerDeck.png", "4PlayerDeck2.jpg"], "layout": "layout_4p.json"},
 }
+
+
+def _resolve_assets_dir(assets_dir):
+    candidates = []
+    if os.path.isabs(assets_dir):
+        candidates.append(assets_dir)
+    else:
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(os.path.join(getattr(sys, "_MEIPASS"), assets_dir))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(base_dir, assets_dir))
+        candidates.append(os.path.join(os.getcwd(), assets_dir))
+        candidates.append(assets_dir)
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0] if candidates else assets_dir
+
+
+def _resolve_asset_image(assets_dir, names):
+    for name in names:
+        path = os.path.join(assets_dir, name)
+        if os.path.exists(path):
+            return path
+        if os.path.exists(name):
+            return name
+    return os.path.join(assets_dir, names[0])
 
 class LayoutDesigner:
     def __init__(self, parent, assets_dir="assets", target_w=1320, show_sidebar=True, hw_connected=None):
@@ -32,7 +60,7 @@ class LayoutDesigner:
         self.temp_items = {} 
         self.current_selection = None
         self.dragging_id = None
-        self.assets_dir = assets_dir
+        self.assets_dir = _resolve_assets_dir(assets_dir)
         self.target_w = target_w
         self.show_sidebar = show_sidebar
         self.template_name = "ALU"
@@ -164,11 +192,9 @@ class LayoutDesigner:
         if name not in TEMPLATES:
             name = "ALU"
         self.template_name = name
-        img_name = TEMPLATES[name]["image"]
+        img_names = TEMPLATES[name]["images"]
         layout_name = TEMPLATES[name]["layout"]
-        self.img_path = os.path.join(self.assets_dir, img_name)
-        if not os.path.exists(self.img_path):
-            self.img_path = img_name
+        self.img_path = _resolve_asset_image(self.assets_dir, img_names)
         self.layout_path = os.path.join(self.assets_dir, layout_name)
 
     def _save_layout_config(self):
@@ -185,11 +211,9 @@ class LayoutDesigner:
         if name not in TEMPLATES:
             return
         self.template_name = name
-        img_name = TEMPLATES[name]["image"]
+        img_names = TEMPLATES[name]["images"]
         layout_name = TEMPLATES[name]["layout"]
-        self.img_path = os.path.join(self.assets_dir, img_name)
-        if not os.path.exists(self.img_path):
-            self.img_path = img_name
+        self.img_path = _resolve_asset_image(self.assets_dir, img_names)
         self.layout_path = os.path.join(self.assets_dir, layout_name)
         self.layout_data = {}
         self.temp_items = {}

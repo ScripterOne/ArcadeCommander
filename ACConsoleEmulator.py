@@ -3,6 +3,7 @@ from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
 import json
 import os
+import sys
 import colorsys
 import time
 import math
@@ -19,6 +20,33 @@ LABEL_MAP = {
     "REWIND": "«", "P1_START": "P1", "MENU": "≡", "P2_START": "P2", "REWIND_ALT": "»",
     "TRACKBALL": ""
 }
+
+
+def _resolve_assets_dir(assets_dir):
+    candidates = []
+    if os.path.isabs(assets_dir):
+        candidates.append(assets_dir)
+    else:
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(os.path.join(getattr(sys, "_MEIPASS"), assets_dir))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(base_dir, assets_dir))
+        candidates.append(os.path.join(os.getcwd(), assets_dir))
+        candidates.append(assets_dir)
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return candidates[0] if candidates else assets_dir
+
+
+def _resolve_asset_image(assets_dir, names):
+    for name in names:
+        path = os.path.join(assets_dir, name)
+        if os.path.exists(path):
+            return path
+        if os.path.exists(name):
+            return name
+    return os.path.join(assets_dir, names[0])
 
 class VirtualLED:
     def __init__(self, canvas, x, y, radius, label, label_type):
@@ -107,7 +135,7 @@ class EmulatorApp:
         
         self.leds = {}
         self.db_path = db_path or game_db_file()
-        self.assets_dir = assets_dir
+        self.assets_dir = _resolve_assets_dir(assets_dir)
         self.target_w = target_w
         self.current_rom = None
         self.animation_running = False
@@ -186,7 +214,7 @@ class EmulatorApp:
 
     def load_environment(self):
         # Load template selection
-        img_name = "Consol.png"
+        img_names = ("Consol.png", "Console.png", "console.png")
         layout_name = "layout.json"
         cfg_path = os.path.join(self.assets_dir, "layout_config.json")
         if os.path.exists(cfg_path):
@@ -195,12 +223,11 @@ class EmulatorApp:
                     cfg = json.load(f)
                 name = cfg.get("template", "ALU")
                 if name == "4P":
-                    img_name = "4PlayerDeck.jpg"
+                    img_names = ("4PlayerDeck.jpg", "4PlayerDeck.png", "4PlayerDeck2.jpg")
                     layout_name = "layout_4p.json"
             except Exception:
                 pass
-        img_path = os.path.join(self.assets_dir, img_name)
-        if not os.path.exists(img_path): img_path = img_name
+        img_path = _resolve_asset_image(self.assets_dir, img_names)
         
         layout_path = os.path.join(self.assets_dir, layout_name)
         self._layout_path = layout_path

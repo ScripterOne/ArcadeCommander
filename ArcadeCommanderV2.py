@@ -337,14 +337,32 @@ ALU_MAP = {
 }
 
 def asset_path(filename: str) -> str:
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(getattr(sys, "_MEIPASS"), "assets", filename)
+    candidates = []
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    asset_check = os.path.join(base_dir, "assets", filename)
-    if os.path.exists(asset_check): return asset_check
-    root_check = os.path.join(base_dir, filename)
-    if os.path.exists(root_check): return root_check
-    return asset_check 
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else base_dir
+
+    if hasattr(sys, "_MEIPASS"):
+        meipass = getattr(sys, "_MEIPASS")
+        candidates.extend([
+            os.path.join(meipass, "assets", filename),
+            os.path.join(meipass, "_internal", "assets", filename),
+            os.path.join(meipass, filename),
+        ])
+
+    candidates.extend([
+        os.path.join(exe_dir, "assets", filename),
+        os.path.join(exe_dir, "_internal", "assets", filename),
+        os.path.join(exe_dir, filename),
+        os.path.join(base_dir, "assets", filename),
+        os.path.join(base_dir, filename),
+        os.path.join(os.getcwd(), "assets", filename),
+        os.path.join(os.getcwd(), filename),
+    ])
+
+    for path in candidates:
+        if path and os.path.exists(path):
+            return path
+    return candidates[0] if candidates else filename
 
 # --- GENERATE CUSTOM ICON (Red with "AC") ---
 def create_default_icon():
@@ -2065,7 +2083,7 @@ class ArcadeGUI_V2:
             self.alu_emulator = EmulatorApp(
                 self.alu_view_host,
                 db_path=self.game_db_path,
-                assets_dir="assets",
+                assets_dir=os.path.dirname(asset_path("Consol.png")),
                 target_w=1320,
                 show_sidebar=False,
                 hw_set=_alu_hw_set,
@@ -2079,7 +2097,7 @@ class ArcadeGUI_V2:
             _update_catchlight_btn()
             self.alu_designer = LayoutDesigner(
                 self.alu_view_host,
-                assets_dir="assets",
+                assets_dir=os.path.dirname(asset_path("Consol.png")),
                 target_w=1320,
                 show_sidebar=False,
                 hw_connected=_alu_hw_connected,
