@@ -3,7 +3,6 @@ import json
 import socket
 import os
 import argparse
-import csv
 
 from vendor_palette import get_vendor_colors
 from app_paths import game_db_file, keymap_dir, migrate_legacy_runtime_files
@@ -13,14 +12,12 @@ ACLIGHTER_HOST = "127.0.0.1"
 ACLIGHTER_PORT = 6006
 migrate_legacy_runtime_files()
 DB_FILE = game_db_file()
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TOP100_CSV = os.path.join(BASE_DIR, "Top100_Games.csv")
 KEYMAP_DIR = keymap_dir()
 
 # DEFAULTS
 DEFAULT_ACTION_COLOR = "40,40,40"
 ACTION_BUTTONS = ["P1_A", "P1_B", "P1_C", "P1_X", "P1_Y", "P1_Z", "P2_A", "P2_B", "P2_C", "P2_X", "P2_Y", "P2_Z"]
-SYSTEM_DEFAULTS = {"P1_START": "255,255,255", "P2_START": "255,255,255", "MENU": "255,255,255", "REWIND": "50,0,0", "TRACKBALL": "0,0,0"}
+SYSTEM_DEFAULTS = {"P1_START": "255,255,255", "P2_START": "255,255,255", "MENU": "255,255,255", "REWIND": "255,0,0", "TRACKBALL": "0,0,0"}
 
 EVENT_TYPES = {
     "FE_START", "FE_QUIT", "SCREENSAVER_START", "SCREENSAVER_STOP", "LIST_CHANGE",
@@ -63,11 +60,6 @@ def _normalize_color(val):
             return None
     return None
 
-def _normalize_name(name):
-    if not name:
-        return ""
-    return "".join(ch for ch in name.lower() if ch.isalnum())
-
 def _normalize_event(name):
     if not name:
         return ""
@@ -87,23 +79,6 @@ def _load_keymap(name):
         return data.get("controls") or {}
     except:
         return None
-
-def _find_vendor_from_csv(game_name):
-    if not game_name or not os.path.exists(TOP100_CSV):
-        return None
-    target = _normalize_name(game_name)
-    if not target:
-        return None
-    try:
-        with open(TOP100_CSV, "r", encoding="utf-8", errors="ignore") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                row_name = _normalize_name(row.get("Game Name") or row.get("Game") or "")
-                if row_name and row_name == target:
-                    return row.get("Developer") or row.get("Vendor")
-    except:
-        return None
-    return None
 
 def send_packet(payload):
     try:
@@ -203,8 +178,9 @@ def main():
                 print(f"[Dispatch] Loaded profile for '{rom_name}'")
                 vendor = db[rom_name].get("vendor")
                 if not vendor:
-                    full_name = db[rom_name].get("full_name", rom_name)
-                    vendor = _find_vendor_from_csv(full_name)
+                    metadata = db[rom_name].get("metadata", {}) if isinstance(db[rom_name], dict) else {}
+                    if isinstance(metadata, dict):
+                        vendor = metadata.get("manufacturer", "") or metadata.get("developer", "")
                 vendor_colors = get_vendor_colors(vendor)
                 if vendor_colors:
                     for btn in ACTION_BUTTONS:

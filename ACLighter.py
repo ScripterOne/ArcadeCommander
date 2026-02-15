@@ -66,6 +66,11 @@ class StateManager:
         self.running = True
         self.connected = False
         self.port_name = "Searching..."
+        self.service_pid = os.getpid()
+        self.listener_bound = False
+        self.listener_error = ""
+        self.state_update_count = 0
+        self.animation_update_count = 0
         
         self.current_state = {
             "mode": "IDLE",       
@@ -97,15 +102,37 @@ class StateManager:
 
     def _listener_loop(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try: server.bind(('127.0.0.1', CONFIG_PORT)); server.listen(5)
-        except: return
+        try:
+            # Enforce single ACLighter owner of port 6006.
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind(('127.0.0.1', CONFIG_PORT))
+            server.listen(5)
+            self.listener_bound = True
+            self.listener_error = ""
+            print(f"[ACLighter] Listening on 127.0.0.1:{CONFIG_PORT} (pid={self.service_pid})")
+        except Exception as e:
+            self.listener_bound = False
+            self.listener_error = str(e)
+            print(f"[ACLighter] Listener bind failed on port {CONFIG_PORT}: {e}")
+            self.running = False
+            try:
+                server.close()
+            except Exception:
+                pass
+            return
 
         while self.running:
             try:
                 client, addr = server.accept()
                 threading.Thread(target=self._handle_client, args=(client,), daemon=True).start()
             except: pass
+        try:
+            server.close()
+        except Exception:
+            pass
 
     def _handle_client(self, client):
         try:
@@ -115,6 +142,52 @@ class StateManager:
             
             with self.lock:
                 cmd = package.get('command')
+                if cmd == 'PING':
+                    status = {
+                        "ok": True,
+                        "service": "ACLighter",
+                        "pid": self.service_pid,
+                        "listener_bound": bool(self.listener_bound),
+                        "listener_error": self.listener_error,
+                        "state_updates": int(self.state_update_count),
+                        "animation_updates": int(self.animation_update_count),
+                        "connected": bool(self.connected),
+                        "driver_connected": bool(self.driver.is_connected()),
+                        "port": self.port_name,
+                        "mode": self.current_state.get("mode", "IDLE"),
+                    }
+                    try:
+                        client.sendall(json.dumps(status).encode("utf-8"))
+                    except:
+                        pass
+                    return
+
+                elif cmd == 'RECONNECT_DRIVER':
+                    ok = False
+                    try:
+                        ok = bool(self.driver.reconnect())
+                    except:
+                        ok = False
+                    self._check_connection()
+                    status = {
+                        "ok": ok,
+                        "service": "ACLighter",
+                        "pid": self.service_pid,
+                        "listener_bound": bool(self.listener_bound),
+                        "listener_error": self.listener_error,
+                        "state_updates": int(self.state_update_count),
+                        "animation_updates": int(self.animation_update_count),
+                        "connected": bool(self.connected),
+                        "driver_connected": bool(self.driver.is_connected()),
+                        "port": self.port_name,
+                        "mode": self.current_state.get("mode", "IDLE"),
+                    }
+                    try:
+                        client.sendall(json.dumps(status).encode("utf-8"))
+                    except:
+                        pass
+                    return
+
                 if cmd == 'STATE_UPDATE':
                     self.current_state['mode'] = package.get('mode', 'IDLE')
                     raw_data = package.get('data', {})
@@ -124,12 +197,14 @@ class StateManager:
                         if color is not None:
                             new_leds[k] = color
                     self.current_state['leds'] = new_leds
+                    self.state_update_count += 1
 
                 elif cmd == 'ANIMATION':
                     self.current_state['mode'] = 'ANIMATION'
                     anim = resolve_animation(package.get('type', 'RAINBOW')) or 'RAINBOW'
                     self.current_state['anim_type'] = anim
                     self.current_state['phase'] = 0.0
+                    self.animation_update_count += 1
                     print(f"[ACLighter] Started Intensity Mode: {self.current_state['anim_type']}")
         except: pass
         finally: client.close()

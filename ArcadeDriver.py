@@ -48,6 +48,7 @@ class Arcade:
         self.LEDS = PIN_MAP
         self.mode = "NONE"
         self.ser = None
+        self._last_write_err_log_ts = 0.0
         # Initialize pixels with the requested count
         self.pixels = [(0,0,0)] * led_count
         self.baud = baud or DEFAULT_BAUD
@@ -55,10 +56,14 @@ class Arcade:
 
     def reconnect(self, port=None):
         self.close()
-        self.mode = "SERIAL"
-        self._connect_serial(port, self.baud)
+        self.mode = "NONE"
+        return self._connect_serial(port, self.baud)
 
-    def is_connected(self): return self.mode != "NONE"
+    def is_connected(self):
+        try:
+            return self.mode == "SERIAL" and self.ser is not None and bool(getattr(self.ser, "is_open", False))
+        except Exception:
+            return False
 
     def _connect_serial(self, port, baud):
         if not port:
@@ -66,11 +71,22 @@ class Arcade:
             port = ports[0] if ports else DEFAULT_PORT
             
         try:
-            self.ser = serial.Serial(port, baud, timeout=1)
+            self.ser = serial.Serial(port, baud, timeout=0.25, write_timeout=0.35)
             self.ser.dtr = False 
             time.sleep(1) 
+            try:
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
+            self.mode = "SERIAL"
             print(f"[Driver] Opened {port} @ {baud}")
-        except Exception as e: print(f"[Driver] Serial Error: {e}")
+            return True
+        except Exception as e:
+            self.ser = None
+            self.mode = "NONE"
+            print(f"[Driver] Serial Error: {e}")
+            return False
 
     def set(self, n, c):
         idx = n if isinstance(n, int) else PIN_MAP.get(n, -1)
@@ -82,14 +98,22 @@ class Arcade:
         self.pixels = [c] * len(self.pixels)
 
     def show(self):
-        if self.mode == "SERIAL": self._serial_write()
+        if self.mode == "SERIAL":
+            return bool(self._serial_write())
+        return False
 
     def close(self):
-        if self.ser: self.ser.close()
+        if self.ser:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
+        self.ser = None
         self.mode = "NONE"
 
     def _serial_write(self):
-        if not self.ser: return
+        if not self.ser:
+            return False
         
         # --- DYNAMIC COUNT FIX ---
         # We calculate count based on the ACTUAL buffer size, not a hardcoded constant
@@ -102,6 +126,12 @@ class Arcade:
         
         payload = bytearray()
         for i, (r, g, b) in enumerate(self.pixels):
+            try:
+                r = max(0, min(255, int(r)))
+                g = max(0, min(255, int(g)))
+                b = max(0, min(255, int(b)))
+            except Exception:
+                r, g, b = 0, 0, 0
             # Quirk Logic
             if i == 16: mode = TRACKBALL_ORDER
             else: mode = BUTTON_ORDER
@@ -111,5 +141,16 @@ class Arcade:
             else: payload.extend((r, g, b)) 
             
         try:
-            self.ser.write(header + payload)
-        except: pass
+            packet = header + payload
+            written = self.ser.write(packet)
+            if written != len(packet):
+                raise IOError(f"partial write {written}/{len(packet)}")
+            return True
+        except Exception as e:
+            now = time.time()
+            if (now - float(self._last_write_err_log_ts)) > 1.0:
+                print(f"[Driver] Serial write failed: {e}")
+            self._last_write_err_log_ts = now
+            # Force reconnect path in ACLighter brain loop.
+            self.close()
+            return False

@@ -13,10 +13,10 @@ import threading
 import subprocess
 import shutil
 import tempfile
-import csv
 import re
 import traceback
 import wave
+import copy
 from app_paths import (
     animation_library_file,
     controller_config_file,
@@ -404,6 +404,7 @@ else:
         "PULSE_BLUE",
         "HYPER_STROBE",
         "TEASE",
+        "TEASE_INDEPENDENT",
     ]
 
 def _hex_to_rgb(hex_color):
@@ -1095,6 +1096,69 @@ class ArcadeGUI_V2:
             self.override_enabled_var = tk.BooleanVar(value=True)
             self.color_clipboard = None
             self._palette_popup = None
+            self.tab_help_map = {
+                "ARCADE COMMANDER": {
+                    "short": "Build and apply game button color maps to deck/hardware.",
+                    "full": (
+                        "Purpose:\n"
+                        "Build button profiles and assign/preview game-specific button colors on the control deck.\n\n"
+                        "You can:\n"
+                        "- Select games and load their mapped controls.\n"
+                        "- Edit live button colors/effects for deck groups.\n"
+                        "- Apply to hardware/emulator and run quick control tests."
+                    ),
+                },
+                "EMULATOR": {
+                    "short": "Preview game maps/effects on the virtual control deck.",
+                    "full": (
+                        "Purpose:\n"
+                        "Preview what a game profile, effect, or animation looks like on the virtual control deck.\n\n"
+                        "You can:\n"
+                        "- Load a game and view DB-driven button map colors.\n"
+                        "- Apply shared effects/animations to preview behavior.\n"
+                        "- Validate visual results before sending to hardware."
+                    ),
+                },
+                "GAME MANAGER": {
+                    "short": "Edit game DB metadata, profile policy, and event assignments.",
+                    "full": (
+                        "Purpose:\n"
+                        "Manage each game's database record, profile settings, and event mapping.\n\n"
+                        "You can:\n"
+                        "- Edit catalog metadata and ROM-key-linked profile fields.\n"
+                        "- Assign event-to-animation and button-map behavior.\n"
+                        "- Preview assignment impact and save overrides to the shared DB."
+                    ),
+                },
+                "FX EDITOR": {
+                    "short": "Create/tune FX and animations in a sandbox preview.",
+                    "full": (
+                        "Purpose:\n"
+                        "Design and test effects/animations, then save to the shared FX library and game profile events.\n\n"
+                        "You can:\n"
+                        "- Build/tune modulation, audio-driven behavior, and animations.\n"
+                        "- Save/load FX library entries and assign FX start/end for a game.\n"
+                        "- Preview in-editor and publish shared FX choices.\n\n"
+                        "Note:\n"
+                        "FX Editor does not overwrite a game's default button color map (controls) unless you explicitly update controls elsewhere."
+                    ),
+                },
+                "CONTROLLER CONFIG": {
+                    "short": "Set global controller capabilities and app behavior.",
+                    "full": (
+                        "Purpose:\n"
+                        "Configure hardware capabilities and global app settings used across all tabs.\n\n"
+                        "You can:\n"
+                        "- Set controller type/layout/player configuration.\n"
+                        "- Configure app defaults (startup behavior/effects engine settings).\n"
+                        "- Review summary stats and planned enhancement items."
+                    ),
+                },
+            }
+            self._tab_help_tip = None
+            self._tab_help_tip_label = None
+            self._tab_help_tip_tab = ""
+            self._tab_help_hover_poll_id = None
             self.fx_presets = {
                   "Warm Pulse": {
                       "colors": ["#FFB703", "#FB8500", "#E63946", "#FF006E"],
@@ -1177,6 +1241,10 @@ class ArcadeGUI_V2:
             self.notebook.add(self.tab_fx_editor, text="FX EDITOR")
             self.notebook.add(self.tab_controller, text="CONTROLLER CONFIG")
             self.notebook.bind("<<NotebookTabChanged>>", self._update_notebook_theme)
+            self.notebook.bind("<Motion>", self._on_notebook_tab_hover)
+            self.notebook.bind("<Enter>", self._on_notebook_tab_enter)
+            self.notebook.bind("<Leave>", self._on_notebook_tab_leave)
+            self.notebook.bind("<Button-3>", self._on_notebook_tab_right_click)
 
             self.commander_fx_row = tk.Frame(self.tab_main, bg=COLORS["CHARCOAL"])
             self.commander_fx_row.pack(fill="x", padx=8, pady=(6, 2))
@@ -1263,7 +1331,8 @@ class ArcadeGUI_V2:
             
             self.root.bind_all("<Key>", lambda e: self.note_activity())
             self.root.bind_all("<Button>", lambda e: self.note_activity())
-            
+            self._init_dev_smoke_runner()
+             
         except Exception as e:
             tb = traceback.format_exc()
             messagebox.showerror("CRITICAL ERROR", f"Init failed:\n{e}\n\n{tb}")
@@ -1621,8 +1690,44 @@ class ArcadeGUI_V2:
             print(f"DEBUG: Effect tick failed: {exc}")
             return False
     def is_connected(self):
-        try: return self.cab.is_connected()
-        except: return False
+        try:
+            return bool(self.cab.is_connected())
+        except Exception:
+            return False
+    def _get_aclighter_status(self, force=False):
+        if not hasattr(self, "cab") or not hasattr(self.cab, "get_status"):
+            return None
+        now = time.time()
+        last = float(getattr(self, "_acl_status_ts", 0.0))
+        if (not force) and (now - last < 0.8):
+            return getattr(self, "_acl_status_cache", None)
+        status = None
+        try:
+            status = self.cab.get_status(timeout=0.25)
+        except Exception:
+            status = None
+        self._acl_status_ts = now
+        if isinstance(status, dict):
+            self._acl_status_cache = status
+            return status
+        return getattr(self, "_acl_status_cache", None)
+    def _ensure_hw_ready(self):
+        if not self.is_connected():
+            return False
+        status = self._get_aclighter_status(force=True)
+        if not isinstance(status, dict):
+            return True
+        if bool(status.get("driver_connected", False)):
+            return True
+        if hasattr(self.cab, "request_driver_reconnect"):
+            try:
+                self.cab.request_driver_reconnect(timeout=2.5)
+            except Exception:
+                pass
+            status = self._get_aclighter_status(force=True)
+            if isinstance(status, dict) and bool(status.get("driver_connected", False)):
+                return True
+        return False
     def set_port(self, port):
         self.port = port; self.save_settings({"port": port})
         try: self.cab.reconnect(port)
@@ -1917,6 +2022,12 @@ class ArcadeGUI_V2:
                 cab = getattr(self, "cab", None)
                 if not cab:
                     return {}
+                if getattr(self, "alu_static_preview_lock", False):
+                    if hasattr(self, "led_state") and isinstance(self.led_state, dict):
+                        snap = {}
+                        for name, data in self.led_state.items():
+                            snap[name] = data.get("primary")
+                        return snap
                 # When not animating, prefer Commander state so theme changes reflect immediately.
                 effects_live = bool(getattr(self, "effects_enabled", False) and getattr(self, "effects_engine", None))
                 if (not getattr(self, "animating", False)
@@ -2003,7 +2114,17 @@ class ArcadeGUI_V2:
         search_row = tk.Frame(lib_card, bg=COLORS["SURFACE"])
         search_row.pack(fill="x", padx=10, pady=(0, 6))
         self.alu_search_var = tk.StringVar(value="")
-        tk.Entry(search_row, textvariable=self.alu_search_var, bg=COLORS["SURFACE_LIGHT"], fg="white", font=("Consolas", 10), borderwidth=0).pack(side="left", fill="x", expand=True)
+        self.alu_search_entry = tk.Entry(
+            search_row,
+            textvariable=self.alu_search_var,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            font=("Consolas", 10),
+            borderwidth=0,
+        )
+        self.alu_search_entry.pack(side="left", fill="x", expand=True)
+        self.alu_search_entry.bind("<KeyRelease>", self._alu_refresh_list)
+        self.alu_search_entry.bind("<Return>", self._alu_load_selected)
         ModernButton(search_row, text="LOAD", bg=COLORS["SURFACE_LIGHT"], fg="white", width=6, font=("Segoe UI", 8, "bold"),
                      command=self._alu_load_selected).pack(side="right", padx=(6, 0))
         ModernButton(search_row, text="REFRESH", bg=COLORS["SURFACE_LIGHT"], fg="white", width=7, font=("Segoe UI", 8, "bold"),
@@ -2018,6 +2139,17 @@ class ArcadeGUI_V2:
         vsb.pack(side="right", fill="y")
         self.alu_listbox.configure(yscrollcommand=vsb.set)
         self.alu_listbox.bind("<<ListboxSelect>>", self._alu_on_select)
+        self.alu_game_meta_var = tk.StringVar(value="Select a game to view DB profile and keymap settings.")
+        tk.Label(
+            lib_card,
+            textvariable=self.alu_game_meta_var,
+            bg=COLORS["SURFACE"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8),
+            justify="left",
+            anchor="w",
+            wraplength=420,
+        ).pack(fill="x", padx=10, pady=(0, 8))
         self._alu_refresh_list()
         # Card 2: Effects & Animations (for emulator preview)
         fx_card = tk.Frame(cards_row, bg=COLORS["SURFACE"], highlightthickness=1, highlightbackground=COLORS["SURFACE_LIGHT"])
@@ -2085,6 +2217,7 @@ class ArcadeGUI_V2:
         emu_tools_inner.pack(pady=14)
         self._build_tools_buttons(emu_tools_inner, track_port=False)
         self.alu_last_rom = None
+        self.alu_static_preview_lock = False
         self._alu_fx_refresh_list()
 
     def _alu_init_leds(self):
@@ -2103,6 +2236,8 @@ class ArcadeGUI_V2:
         part = val.split("|")[0] if isinstance(val, str) and "|" in val else val
         if isinstance(part, str):
             p = part.strip()
+            if p.lower() in ("", "-", "none", "off", "null", "n/a"):
+                return None
             if p.startswith("#") and len(p) == 7:
                 return p
             if "," in p:
@@ -2111,48 +2246,133 @@ class ArcadeGUI_V2:
                     return self._rgb_to_hex(r, g, b)
                 except Exception:
                     return None
+            # Support named colors used in DB entries (e.g. Red, Blue, Cyan).
+            try:
+                r16, g16, b16 = self.root.winfo_rgb(p)
+                return self._rgb_to_hex(r16 // 256, g16 // 256, b16 // 256)
+            except Exception:
+                return None
         return None
 
     def _alu_preview_from_rom(self, rom):
         if not hasattr(self, "alu_emulator"):
             return
+        # Lock emulator to selected ROM static colors until user explicitly starts an effect/animation.
+        self.alu_static_preview_lock = True
+        # Keep shared deck state aligned with the selected ROM so emulator sync
+        # does not snap back to stale/off values.
+        try:
+            entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
+            controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+            if isinstance(controls, dict):
+                self._load_controls_into_commander_preview(controls, apply_hardware=False)
+        except Exception:
+            pass
         self.alu_last_rom = rom
         self.alu_emulator.load_profile_by_rom(rom)
+        # Keep Emulator tab strictly in sync with the in-memory JSON DB used by all tabs.
+        try:
+            entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
+            controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+            if isinstance(controls, dict) and hasattr(self.alu_emulator, "apply_snapshot"):
+                snap = {}
+                for bid, val in controls.items():
+                    hex_c = self._alu_parse_color(val)
+                    rgb = _hex_to_rgb(hex_c) if hex_c else None
+                    if rgb is not None:
+                        snap[bid] = rgb
+                for bid, rgb in {
+                    "REWIND": (255, 0, 0),
+                    "P1_START": (0, 0, 255),
+                    "MENU": (255, 255, 255),
+                    "P2_START": (0, 255, 0),
+                }.items():
+                    if bid not in snap:
+                        snap[bid] = rgb
+                if snap:
+                    self.alu_emulator.apply_snapshot(snap)
+        except Exception:
+            pass
 
     def _alu_apply_to_control_deck(self, rom):
-        if not hasattr(self, "led_state"):
-            return
         entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
         controls = entry.get("controls", {}) or {}
+        self._load_controls_into_commander_preview(controls, apply_hardware=True)
+
+    def _load_controls_into_commander_preview(self, controls, apply_hardware=False):
+        if not hasattr(self, "led_state"):
+            return
+        def _is_off(rgb):
+            return (not isinstance(rgb, (tuple, list)) or len(rgb) < 3 or (int(rgb[0]) == 0 and int(rgb[1]) == 0 and int(rgb[2]) == 0))
         for n, d in self.led_state.items():
             d['primary'] = (0, 0, 0)
             d['secondary'] = (0, 0, 0)
             d['colors'] = [(0, 0, 0)] * 4
             d['pulse'] = False
+            d['fx_mode'] = None
+            d['phase'] = 0.0
+            d['speed'] = 1.0
+            d['fx'] = [None, None, None, None]
         for bid, val in controls.items():
             if bid not in self.led_state:
                 continue
-            hex_c = self._alu_parse_color(val)
-            rgb = _hex_to_rgb(hex_c) if hex_c else (0, 0, 0)
+            slot_colors = []
+            if isinstance(val, str) and "|" in val:
+                for part in val.split("|"):
+                    hex_c = self._alu_parse_color(part)
+                    rgb = _hex_to_rgb(hex_c) if hex_c else None
+                    if rgb is not None:
+                        slot_colors.append(rgb)
+            if not slot_colors:
+                hex_c = self._alu_parse_color(val)
+                rgb = _hex_to_rgb(hex_c) if hex_c else (0, 0, 0)
+                slot_colors = [rgb]
+            while len(slot_colors) < 4:
+                slot_colors.append((0, 0, 0))
+            slot_colors = slot_colors[:4]
             d = self.led_state[bid]
-            d['primary'] = rgb
-            d['secondary'] = (0, 0, 0)
-            d['colors'] = [rgb, (0, 0, 0), (0, 0, 0), (0, 0, 0)]
+            d['primary'] = slot_colors[0]
+            d['secondary'] = slot_colors[1]
+            d['colors'] = list(slot_colors)
             d['pulse'] = False
+            d['fx_mode'] = None
+            d['phase'] = 0.0
+            d['speed'] = 1.0
+            d['fx'] = [None, None, None, None]
+        # Admin defaults if missing/unassigned in a game entry.
+        admin_defaults = {
+            "REWIND": (255, 0, 0),
+            "P1_START": (0, 0, 255),
+            "MENU": (255, 255, 255),
+            "P2_START": (0, 255, 0),
+        }
+        for bid, rgb in admin_defaults.items():
+            if bid not in self.led_state:
+                continue
+            cur = self.led_state[bid].get('primary', (0, 0, 0))
+            if _is_off(cur):
+                self.led_state[bid]['primary'] = rgb
+                self.led_state[bid]['secondary'] = (0, 0, 0)
+                self.led_state[bid]['colors'] = [rgb, (0, 0, 0), (0, 0, 0), (0, 0, 0)]
+                self.led_state[bid]['pulse'] = False
+                self.led_state[bid]['fx_mode'] = None
+                self.led_state[bid]['phase'] = 0.0
+                self.led_state[bid]['speed'] = 1.0
+                self.led_state[bid]['fx'] = [None, None, None, None]
         self.refresh_gui_from_state()
-        self.apply_settings_to_hardware()
+        if apply_hardware:
+            self.apply_settings_to_hardware()
 
     def _alu_apply_selected(self):
-        rom = None
-        if hasattr(self, "alu_listbox") and self.alu_listbox.curselection():
-            rom = self.alu_listbox.get(self.alu_listbox.curselection()[0])
-        elif self.alu_last_rom:
+        rom = self._alu_selected_or_search_rom()
+        if not rom and self.alu_last_rom:
             rom = self.alu_last_rom
         if not rom:
             return
         self.apply_game_profile(rom, event="start")
 
     def _alu_apply_effect_selection(self):
+        self.alu_static_preview_lock = False
         if not hasattr(self, "alu_fx_listbox"):
             return
         sel = self.alu_fx_listbox.curselection()
@@ -2162,6 +2382,7 @@ class ArcadeGUI_V2:
         self._apply_shared_effect(effect)
 
     def _alu_apply_animation_selection(self):
+        self.alu_static_preview_lock = False
         if not hasattr(self, "alu_anim_lib_list"):
             return
         sel = self.alu_anim_lib_list.curselection()
@@ -2185,6 +2406,7 @@ class ArcadeGUI_V2:
         self._alu_start_animation_sequence(seq)
 
     def _alu_start_animation_sequence(self, seq):
+        self.alu_static_preview_lock = False
         if not isinstance(seq, list) or not seq:
             return
         # Stop any previously scheduled sequence playback.
@@ -2227,21 +2449,111 @@ class ArcadeGUI_V2:
         self._alu_anim_seq_after_id = self.root.after(int(max(100, duration * 1000)), self._alu_anim_sequence_tick)
 
 
-    def _alu_refresh_list(self):
+    def _alu_refresh_list(self, _evt=None):
         if not hasattr(self, "alu_listbox"):
             return
         q = (self.alu_search_var.get() or "").lower()
         self.alu_listbox.delete(0, tk.END)
+        self.alu_label_to_rom = {}
+        title_key = self.game_title_key if hasattr(self, "game_title_key") else None
+        if getattr(self, "game_rows", None) and title_key:
+            labels = []
+            for row in self.game_rows:
+                title = str(row.get(title_key, "")).strip() if isinstance(row, dict) else ""
+                if not title:
+                    continue
+                rom = self._row_rom_key(row, self.game_col_map, title_key)
+                if not rom:
+                    continue
+                label = title
+                if label in self.alu_label_to_rom and self.alu_label_to_rom[label] != rom:
+                    label = f"{title} [{rom}]"
+                if q and q not in label.lower() and q not in rom.lower():
+                    continue
+                self.alu_label_to_rom[label] = rom
+                labels.append(label)
+            for label in sorted(labels, key=lambda s: str(s).lower()):
+                self.alu_listbox.insert(tk.END, label)
+            return
         for rom in sorted(self.game_db.keys()):
-            if q and q not in rom.lower():
+            label = rom
+            if q and q not in label.lower():
                 continue
-            self.alu_listbox.insert(tk.END, rom)
+            self.alu_label_to_rom[label] = rom
+            self.alu_listbox.insert(tk.END, label)
+
+    def _alu_selected_or_search_rom(self):
+        if hasattr(self, "alu_listbox") and self.alu_listbox.curselection():
+            sel_label = self.alu_listbox.get(self.alu_listbox.curselection()[0])
+            if isinstance(getattr(self, "alu_label_to_rom", None), dict):
+                return self.alu_label_to_rom.get(sel_label, sel_label)
+            return sel_label
+        q = (self.alu_search_var.get() or "").strip().lower() if hasattr(self, "alu_search_var") else ""
+        if not q:
+            return None
+        matches = []
+        if isinstance(getattr(self, "alu_label_to_rom", None), dict) and self.alu_label_to_rom:
+            for label, rom in self.alu_label_to_rom.items():
+                if q in str(label).lower() or q in str(rom).lower():
+                    matches.append((label, rom))
+        else:
+            for rom in sorted(self.game_db.keys()):
+                if q in rom.lower():
+                    matches.append((rom, rom))
+        if not matches:
+            return None
+        if hasattr(self, "alu_listbox"):
+            self.alu_listbox.selection_clear(0, tk.END)
+            idx = None
+            for i in range(self.alu_listbox.size()):
+                if self.alu_listbox.get(i) == matches[0][0]:
+                    idx = i
+                    break
+            if idx is not None:
+                self.alu_listbox.selection_set(idx)
+                self.alu_listbox.activate(idx)
+                self.alu_listbox.see(idx)
+        return matches[0][1]
 
     def _alu_on_select(self, _evt=None):
         if not self.alu_listbox.curselection():
             return
-        rom = self.alu_listbox.get(self.alu_listbox.curselection()[0])
+        label = self.alu_listbox.get(self.alu_listbox.curselection()[0])
+        rom = self.alu_label_to_rom.get(label, label) if isinstance(getattr(self, "alu_label_to_rom", None), dict) else label
+        entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
+        self._load_controls_into_commander_preview(entry.get("controls", {}) or {}, apply_hardware=False)
         self._alu_preview_from_rom(rom)
+        self._alu_update_game_meta(rom)
+
+    def _format_event_summary_items(self, event_map):
+        if not isinstance(event_map, dict):
+            return []
+        items = []
+        for key, val in sorted(event_map.items()):
+            if not val:
+                continue
+            if isinstance(val, dict):
+                anim = str(val.get("animation") or "NONE")
+                bmap = str(val.get("button_map") or "Current Deck")
+                items.append(f"{key}:{anim} ({bmap})")
+            else:
+                items.append(f"{key}:{val}")
+        return items
+
+    def _alu_update_game_meta(self, rom):
+        if not hasattr(self, "alu_game_meta_var"):
+            return
+        entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
+        profile = entry.get("profile", {}) if isinstance(entry, dict) else {}
+        controller = str(profile.get("controller_mode", "ARCADE_PANEL"))
+        policy = str(profile.get("lighting_policy", "AUTO"))
+        default_fx = str(profile.get("default_fx", "") or "NONE")
+        event_map = profile.get("events") or entry.get("events") or {}
+        events = self._format_event_summary_items(event_map)
+        events_txt = ", ".join(events) if events else "NONE"
+        self.alu_game_meta_var.set(
+            f"ROM: {rom} | Controller: {controller} | Policy: {policy} | Default FX: {default_fx} | Events: {events_txt}"
+        )
     def _alu_fx_refresh_list(self, _evt=None):
         if not hasattr(self, "alu_fx_list"):
             return
@@ -2311,14 +2623,16 @@ class ArcadeGUI_V2:
         self._save_game_db()
         if hasattr(self, "alu_fx_status"):
             self.alu_fx_status.config(text=f"Saved {fx_name} to {slot}.")
-    def _alu_load_selected(self):
+    def _alu_load_selected(self, _evt=None):
         if not hasattr(self, "alu_listbox"):
             return
-        sel = self.alu_listbox.curselection()
-        if not sel:
+        rom = self._alu_selected_or_search_rom()
+        if not rom:
             return
-        rom = self.alu_listbox.get(sel[0])
+        entry = self.game_db.get(rom, {}) if hasattr(self, "game_db") else {}
+        self._load_controls_into_commander_preview(entry.get("controls", {}) or {}, apply_hardware=False)
         self._alu_preview_from_rom(rom)
+        self._alu_update_game_meta(rom)
     def _alu_switch_view(self):
         if not ALU_AVAILABLE:
             return
@@ -2348,6 +2662,16 @@ class ArcadeGUI_V2:
         t = title.lower()
         t = re.sub(r"[^a-z0-9]+", "", t)
         return t
+    def _row_rom_key(self, row, col_map, title_key):
+        if not isinstance(row, dict):
+            return ""
+        rom_col = (col_map or {}).get("rom_key")
+        if rom_col:
+            rom_val = str(row.get(rom_col, "")).strip().lower()
+            if rom_val:
+                return rom_val
+        title = row.get(title_key, "") if title_key else ""
+        return self._rom_key_from_title(title)
     def _load_game_db(self):
         path = getattr(self, "game_db_path", game_db_file())
         if not os.path.exists(path):
@@ -2377,8 +2701,7 @@ class ArcadeGUI_V2:
         title_key = self.game_title_key or self.gm_title_key
         rows = self.game_rows or self.gm_rows
         for r in rows:
-            title = r.get(title_key, "") if title_key else ""
-            if self._rom_key_from_title(title) == rom_key:
+            if self._row_rom_key(r, self.game_col_map, title_key) == rom_key:
                 return r
         return None
     def _game_build_col_map(self, headers):
@@ -2390,6 +2713,7 @@ class ArcadeGUI_V2:
             return None
         return {
             "title": pick("Game Name", "Title", "Game", "Name"),
+            "rom_key": pick("ROM Key", "Rom Key", "ROM"),
             "developer": pick("Developer", "Manufacturer", "Vendor", "Publisher"),
             "year": pick("Year", "Release Year", "Released"),
             "platforms": pick("Platforms", "Platform", "System", "Emulator"),
@@ -2398,67 +2722,75 @@ class ArcadeGUI_V2:
             "rank": pick("Rank", "Ranking"),
         }
     def _load_game_catalog(self):
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Top100_Games.csv")
-        if not os.path.exists(path):
-            return [], {}
-        try:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                reader = csv.DictReader(f)
-                rows = [r for r in reader]
-            col_map = self._game_build_col_map(reader.fieldnames or [])
-            return rows, col_map
-        except:
-            return [], {}
-    def _upsert_catalog_row(self, data):
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Top100_Games.csv")
-        headers = []
-        rows = []
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    reader = csv.DictReader(f)
-                    headers = reader.fieldnames or []
-                    rows = [r for r in reader]
-            except Exception:
-                headers = []
-                rows = []
-        if not headers:
-            headers = ["Game Name", "Developer", "Year", "Genres", "Platforms", "Recommended Platform", "Rank"]
+        headers = ["ROM Key", "Game Name", "Developer", "Year", "Genres", "Platforms", "Recommended Platform", "Rank"]
         col_map = self._game_build_col_map(headers)
-        title_col = col_map.get("title") or headers[0]
-        title = (data.get("title") or "").strip()
-        if not title:
-            raise ValueError("Missing title")
-        new_row = {h: "" for h in headers}
-        def set_field(src_key, col_key):
-            col = col_map.get(col_key)
-            if col:
-                new_row[col] = (data.get(src_key) or "").strip()
-        set_field("title", "title")
-        set_field("developer", "developer")
-        set_field("year", "year")
-        set_field("genre", "genres")
-        set_field("platform", "platforms")
-        set_field("rec_platform", "rec_platform")
-        set_field("rank", "rank")
-        idx = None
-        for i, r in enumerate(rows):
-            if (r.get(title_col, "").strip().lower() == title.lower()):
-                idx = i
-                break
-        if idx is not None:
-            for h, v in new_row.items():
-                if v:
-                    rows[idx][h] = v
-        else:
-            rows.append(new_row)
-        try:
-            with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=headers)
-                writer.writeheader()
-                writer.writerows(rows)
-        except Exception as e:
-            raise RuntimeError(f"Failed to save catalog: {e}")
+        title_col = col_map.get("title") or "Game Name"
+        rom_col = col_map.get("rom_key") or "ROM Key"
+        rows = []
+
+        for rom in sorted(getattr(self, "game_db", {}).keys(), key=lambda s: str(s).lower()):
+            rom_l = str(rom).strip().lower()
+            if not rom_l:
+                continue
+            entry = self.game_db.get(rom_l, {})
+            if not isinstance(entry, dict):
+                continue
+            md = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+            override = entry.get("catalog_override", {}) if isinstance(entry.get("catalog_override"), dict) else {}
+            base = entry.get("catalog_base", {}) if isinstance(entry.get("catalog_base"), dict) else {}
+            row = {h: "" for h in headers}
+            row[rom_col] = rom_l
+            row[title_col] = (
+                str(override.get("title", "")).strip()
+                or str(md.get("title", "")).strip()
+                or str(base.get("title", "")).strip()
+                or rom_l
+            )
+            dev_col = col_map.get("developer")
+            year_col = col_map.get("year")
+            genre_col = col_map.get("genres")
+            plat_col = col_map.get("platforms")
+            rec_col = col_map.get("rec_platform")
+            rank_col = col_map.get("rank")
+            if dev_col:
+                row[dev_col] = (
+                    str(override.get("developer", "")).strip()
+                    or str(entry.get("vendor", "")).strip()
+                    or str(md.get("manufacturer", "")).strip()
+                    or str(base.get("developer", "")).strip()
+                )
+            if year_col:
+                row[year_col] = (
+                    str(override.get("year", "")).strip()
+                    or str(md.get("year", "")).strip()
+                    or str(base.get("year", "")).strip()
+                )
+            if genre_col:
+                row[genre_col] = (
+                    str(override.get("genre", "")).strip()
+                    or str(md.get("genre", "")).strip()
+                    or str(base.get("genre", "")).strip()
+                )
+            if plat_col:
+                row[plat_col] = (
+                    str(override.get("platforms", "")).strip()
+                    or str(base.get("platforms", "")).strip()
+                )
+            if rec_col:
+                row[rec_col] = (
+                    str(override.get("rec_platform", "")).strip()
+                    or str(base.get("rec_platform", "")).strip()
+                )
+            if rank_col:
+                row[rank_col] = (
+                    str(override.get("rank", "")).strip()
+                    or str(base.get("rank", "")).strip()
+                )
+            rows.append(row)
+        return rows, col_map
+    def _upsert_catalog_row(self, data):
+        # Catalog data is now sourced from game_db JSON only.
+        rows, col_map = self._load_game_catalog()
         self.game_rows = list(rows)
         self.gm_rows = list(rows)
         self.game_col_map = col_map
@@ -2470,12 +2802,15 @@ class ArcadeGUI_V2:
         q = self.game_search.get().strip().lower()
         self.game_list.delete(0, tk.END)
         title_key = self.game_title_key
+        titles = []
         for row in self.game_rows:
             title = row.get(title_key, "") if title_key else ""
             if not title:
                 continue
             if q and q not in title.lower():
                 continue
+            titles.append(title)
+        for title in sorted(titles, key=lambda s: str(s).lower()):
             self.game_list.insert(tk.END, title)
         if self.game_list.size() > 0:
             self.game_list.selection_set(0)
@@ -2497,32 +2832,33 @@ class ArcadeGUI_V2:
             return
         def setv(k, v):
             if k in self.game_detail_vars:
-                self.game_detail_vars[k].set(v if v else "—")
-        base_title = row.get(self.game_col_map.get("title", ""), "—")
-        rom_key = self._rom_key_from_title(base_title)
+                self.game_detail_vars[k].set(v if v else "â€”")
+        base_title = row.get(self.game_col_map.get("title", ""), "â€”")
+        rom_key = self._row_rom_key(row, self.game_col_map, title_key)
         entry = self.game_db.get(rom_key, {})
+        self._load_controls_into_commander_preview(entry.get("controls", {}) or {}, apply_hardware=False)
         override_enabled = entry.get("override_enabled", True)
         catalog_override = entry.get("catalog_override", {}) or entry.get("catalog", {})
         catalog_base = entry.get("catalog_base", {})
-        def pick(field, col_key, default="—"):
+        def pick(field, col_key, default="â€”"):
             base = catalog_base.get(field) or row.get(self.game_col_map.get(col_key, ""), default)
             if override_enabled:
                 return catalog_override.get(field) or base
             return base
-        setv("catalog_title", pick("title", "title", "—"))
-        setv("catalog_developer", pick("developer", "developer", "—"))
-        setv("catalog_year", pick("year", "year", "—"))
-        setv("catalog_genre", pick("genre", "genres", "—"))
-        plat = pick("platforms", "platforms", "—")
+        setv("catalog_title", pick("title", "title", "â€”"))
+        setv("catalog_developer", pick("developer", "developer", "â€”"))
+        setv("catalog_year", pick("year", "year", "â€”"))
+        setv("catalog_genre", pick("genre", "genres", "â€”"))
+        plat = pick("platforms", "platforms", "â€”")
         rec = pick("rec_platform", "rec_platform", "")
         setv("catalog_platform", f"{plat} / {rec}".strip(" /"))
-        setv("catalog_rank", pick("rank", "rank", "—"))
+        setv("catalog_rank", pick("rank", "rank", "â€”"))
         profile = entry.get("profile", {})
-        setv("profile_rom", rom_key or "—")
+        setv("profile_rom", rom_key or "â€”")
         if override_enabled:
-            setv("profile_controller", profile.get("controller_mode", "—"))
-            setv("profile_policy", profile.get("lighting_policy", "—"))
-            setv("profile_default_fx", profile.get("default_fx", "—"))
+            setv("profile_controller", profile.get("controller_mode", "â€”"))
+            setv("profile_policy", profile.get("lighting_policy", "â€”"))
+            setv("profile_default_fx", profile.get("default_fx", "â€”"))
             # Events summary
             event_map = profile.get("events") or entry.get("events") or {}
             if not isinstance(event_map, dict):
@@ -2533,14 +2869,14 @@ class ArcadeGUI_V2:
                 event_map.setdefault("GAME_QUIT", profile.get("fx_on_end"))
             if profile.get("default_fx"):
                 event_map.setdefault("DEFAULT", profile.get("default_fx"))
-            events = [f"{k}:{v}" for k, v in event_map.items() if v]
-            setv("profile_events", ", ".join(sorted(events)) if events else "—")
+            events = self._format_event_summary_items(event_map)
+            setv("profile_events", ", ".join(sorted(events)) if events else "â€”")
             self._set_controller_mode(profile.get("controller_mode", "UNKNOWN"))
         else:
-            setv("profile_controller", "—")
-            setv("profile_policy", "—")
-            setv("profile_default_fx", "—")
-            setv("profile_events", "—")
+            setv("profile_controller", "â€”")
+            setv("profile_policy", "â€”")
+            setv("profile_default_fx", "â€”")
+            setv("profile_events", "â€”")
             self._set_controller_mode("UNKNOWN")
         status = "OVERRIDE" if rom_key in self.game_db else "NONE"
         if status == "OVERRIDE" and not override_enabled:
@@ -2630,17 +2966,17 @@ class ArcadeGUI_V2:
         tk.Label(details, text="DETAILS", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
         tk.Label(details, text="CATALOG", bg=COLORS["CHARCOAL"], fg=COLORS["P1"], font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(6, 2))
         self.game_detail_vars = {
-            "catalog_title": tk.StringVar(value="—"),
-            "catalog_developer": tk.StringVar(value="—"),
-            "catalog_year": tk.StringVar(value="—"),
-            "catalog_genre": tk.StringVar(value="—"),
-            "catalog_platform": tk.StringVar(value="—"),
-            "catalog_rank": tk.StringVar(value="—"),
-            "profile_rom": tk.StringVar(value="—"),
-            "profile_controller": tk.StringVar(value="—"),
-            "profile_policy": tk.StringVar(value="—"),
-            "profile_default_fx": tk.StringVar(value="—"),
-            "profile_events": tk.StringVar(value="—"),
+            "catalog_title": tk.StringVar(value="â€”"),
+            "catalog_developer": tk.StringVar(value="â€”"),
+            "catalog_year": tk.StringVar(value="â€”"),
+            "catalog_genre": tk.StringVar(value="â€”"),
+            "catalog_platform": tk.StringVar(value="â€”"),
+            "catalog_rank": tk.StringVar(value="â€”"),
+            "profile_rom": tk.StringVar(value="â€”"),
+            "profile_controller": tk.StringVar(value="â€”"),
+            "profile_policy": tk.StringVar(value="â€”"),
+            "profile_default_fx": tk.StringVar(value="â€”"),
+            "profile_events": tk.StringVar(value="â€”"),
             "profile_status": tk.StringVar(value="NONE"),
         }
         for label, key in [
@@ -2674,6 +3010,8 @@ class ArcadeGUI_V2:
         self.game_rows, self.game_col_map = self._load_game_catalog()
         self.game_title_key = self.game_col_map.get("title")
         self._refresh_game_list()
+        if hasattr(self, "alu_listbox"):
+            self._alu_refresh_list()
     def new_game_entry(self):
         if hasattr(self, "notebook") and hasattr(self, "tab_gm"):
             self.notebook.select(self.tab_gm)
@@ -2699,7 +3037,7 @@ class ArcadeGUI_V2:
         if not hasattr(self, "gm_fields"):
             messagebox.showinfo("Save Game", "Game Manager is not available.")
             return
-        rom_key = self._rom_key_from_title(row.get(title_key, ""))
+        rom_key = self._row_rom_key(row, self.game_col_map, title_key)
         decision = messagebox.askyesnocancel(
             "Save Override",
             "Enable override for this game?\nYes = override on, No = override off, Cancel = abort.",
@@ -2707,6 +3045,7 @@ class ArcadeGUI_V2:
         if decision is None:
             return
         entry = self.game_db.get(rom_key, {})
+        entry["controls"] = self._collect_controls_from_led_state(include_slots=True)
         profile = entry.get("profile", {})
         catalog_override = entry.get("catalog_override", {}) or entry.get("catalog", {})
         catalog_base = entry.get("catalog_base", {})
@@ -2744,9 +3083,10 @@ class ArcadeGUI_V2:
             event_map.setdefault("GAME_QUIT", self.gm_fields["fx_on_end"].get())
         if self.gm_fields["default_fx"].get() not in ("", "NONE"):
             event_map.setdefault("DEFAULT", self.gm_fields["default_fx"].get())
-        events = [k for k, v in event_map.items() if v]
+        events = self._format_event_summary_items(event_map)
         if hasattr(self, "gm_fields") and "event_summary" in self.gm_fields:
-            self.gm_fields["event_summary"].set("Configured: " + (", ".join(sorted(events)) if events else "NONE"))
+            self.gm_fields["event_summary"].set("Configured: " + (", ".join(events) if events else "NONE"))
+        self.game_db[rom_key] = entry
         self.gm_selected_rom = rom_key
         self.gm_save_changes()
     def build_utilities(self):
@@ -2780,14 +3120,867 @@ class ArcadeGUI_V2:
         self.status_lbl.pack(side="right")
     def update_status_loop(self):
         connected = self.is_connected()
+        ac_status = self._get_aclighter_status(force=False) if connected else None
+        hw_connected = bool(ac_status.get("driver_connected", connected)) if isinstance(ac_status, dict) else connected
         c_txt = "CONNECTED" if connected else "DISCONNECTED"
+        if connected and not hw_connected:
+            c_txt = "CONNECTED (HW OFFLINE)"
         m_txt = "TESTING" if (self.test_window and self.test_window.winfo_exists()) else ("ANIM" if self.animating else ("DIAG" if self.diag_mode else ("ATTRACT" if self.attract_active else "IDLE")))
-        if connected:
+        if connected and hw_connected:
             self.status_lbl.config(fg=COLORS["SUCCESS"]); self.port_btn.set_base_bg(COLORS["SUCCESS"])
+        elif connected and not hw_connected:
+            self.status_lbl.config(fg=COLORS["DB"]); self.port_btn.set_base_bg(COLORS["DB"])
         else:
             self.status_lbl.config(fg=COLORS["TEXT_DIM"]); self.port_btn.set_base_bg(COLORS["DANGER"])
-        self.status_var.set(f"{c_txt} on {getattr(self.cab,'port',self.port)} | Mode: {m_txt}")
+        port_txt = getattr(self.cab, "port", self.port)
+        if isinstance(ac_status, dict):
+            port_txt = ac_status.get("port", port_txt)
+        self.status_var.set(f"{c_txt} on {port_txt} | Mode: {m_txt}")
         self.root.after(500, self.update_status_loop)
+    def _init_dev_smoke_runner(self):
+        self.dev_smoke_running = False
+        self.dev_smoke_steps = []
+        self.dev_smoke_index = 0
+        self.dev_smoke_results = []
+        self.dev_smoke_after_id = None
+        self.dev_smoke_started_ts = 0.0
+        self.dev_smoke_delay_ms = 900
+        self.dev_smoke_ctx = {}
+        self.dev_smoke_overlay = tk.Label(
+            self.root,
+            text="",
+            bg=COLORS["SURFACE"],
+            fg=COLORS["SYS"],
+            font=("Consolas", 8, "bold"),
+            padx=8,
+            pady=3,
+        )
+        # Hidden developer shortcuts.
+        self.root.bind_all("<Control-Shift-F12>", self._dev_smoke_toggle)
+        self.root.bind_all("<Control-Shift-Escape>", self._dev_smoke_stop)
+    def _dev_smoke_overlay_show(self, text, color=None):
+        if not hasattr(self, "dev_smoke_overlay"):
+            return
+        self.dev_smoke_overlay.config(text=text, fg=(color or COLORS["SYS"]))
+        self.dev_smoke_overlay.place(relx=0.01, rely=0.99, anchor="sw")
+    def _dev_smoke_overlay_hide(self):
+        if hasattr(self, "dev_smoke_overlay"):
+            self.dev_smoke_overlay.place_forget()
+    def _dev_smoke_toggle(self, _evt=None):
+        if getattr(self, "dev_smoke_running", False):
+            return self._dev_smoke_stop()
+        self._dev_smoke_start()
+        return "break"
+    def _dev_smoke_start(self):
+        if not hasattr(self, "notebook"):
+            return
+        if self.dev_smoke_after_id:
+            try:
+                self.root.after_cancel(self.dev_smoke_after_id)
+            except Exception:
+                pass
+            self.dev_smoke_after_id = None
+        self.dev_smoke_running = True
+        self.dev_smoke_started_ts = time.time()
+        self.dev_smoke_index = 0
+        self.dev_smoke_results = []
+        self.dev_smoke_log_lines = []
+        self.dev_smoke_ctx = self._dev_smoke_init_context()
+        self.dev_smoke_steps = [
+            ("Commander Tab", self._dev_smoke_step_commander),
+            ("FX Editor Tab", self._dev_smoke_step_fx_editor),
+            ("Game Manager Tab", self._dev_smoke_step_game_manager),
+            ("Emulator Tab (Load + Start)", self._dev_smoke_step_emulator),
+            ("Hold START Event", self._dev_smoke_step_wait_start),
+            ("Emulator Tab (Trigger End)", self._dev_smoke_step_emulator_end),
+            ("Hold END Event", self._dev_smoke_step_wait_end),
+            ("Cleanup SmokeTest Artifacts", self._dev_smoke_step_cleanup),
+            ("Return To Commander", self._dev_smoke_step_return_home),
+        ]
+        self._dev_smoke_overlay_show("DEV SMOKE STARTED (Ctrl+Shift+Esc to stop)")
+        self.dev_smoke_after_id = self.root.after(180, self._dev_smoke_run_next)
+    def _dev_smoke_stop(self, _evt=None):
+        if self.dev_smoke_after_id:
+            try:
+                self.root.after_cancel(self.dev_smoke_after_id)
+            except Exception:
+                pass
+            self.dev_smoke_after_id = None
+        try:
+            if isinstance(getattr(self, "dev_smoke_ctx", None), dict) and self.dev_smoke_ctx:
+                self._dev_smoke_step_cleanup()
+        except Exception as exc:
+            self._dev_smoke_log(f"Cleanup on stop failed: {exc}")
+        self.dev_smoke_running = False
+        self._dev_smoke_overlay_show("DEV SMOKE STOPPED", COLORS["DANGER"])
+        self.root.after(2200, self._dev_smoke_overlay_hide)
+        return "break"
+    def _dev_smoke_finish(self):
+        self.dev_smoke_running = False
+        elapsed = max(0.0, time.time() - float(getattr(self, "dev_smoke_started_ts", time.time())))
+        total = len(self.dev_smoke_results)
+        passed = sum(1 for _, ok, _ in self.dev_smoke_results if ok)
+        failed = total - passed
+        color = COLORS["SUCCESS"] if failed == 0 else COLORS["DANGER"]
+        self._dev_smoke_overlay_show(f"DEV SMOKE DONE: {passed}/{total} passed in {elapsed:.1f}s", color)
+        for name, ok, detail in self.dev_smoke_results:
+            state = "PASS" if ok else "FAIL"
+            print(f"[DEV SMOKE] {state} | {name} | {detail}")
+        self._dev_smoke_show_report_window()
+        self.root.after(5000, self._dev_smoke_overlay_hide)
+    def _dev_smoke_log(self, text):
+        line = str(text)
+        self.dev_smoke_log_lines.append(line)
+        print(f"[DEV SMOKE] {line}")
+    def _dev_smoke_show_report_window(self):
+        try:
+            if hasattr(self, "_dev_smoke_report_win") and self._dev_smoke_report_win and self._dev_smoke_report_win.winfo_exists():
+                self._dev_smoke_report_win.destroy()
+            win = tk.Toplevel(self.root)
+            win.title("DEV SMOKE REPORT")
+            win.geometry("760x360")
+            win.configure(bg=COLORS["BG"])
+            self._dev_smoke_report_win = win
+            text = tk.Text(win, bg=COLORS["SURFACE"], fg="white", insertbackground="white", wrap="none")
+            text.pack(fill="both", expand=True, padx=10, pady=10)
+            text.insert("end", "Dev Smoke Report\n")
+            text.insert("end", "=" * 70 + "\n")
+            for name, ok, detail in self.dev_smoke_results:
+                state = "PASS" if ok else "FAIL"
+                text.insert("end", f"{state:4} | {name} | {detail}\n")
+            if self.dev_smoke_log_lines:
+                text.insert("end", "\nDetails\n")
+                text.insert("end", "-" * 70 + "\n")
+                for line in self.dev_smoke_log_lines:
+                    text.insert("end", f"{line}\n")
+            text.configure(state="disabled")
+        except Exception:
+            pass
+    def _dev_smoke_run_next(self):
+        self.dev_smoke_after_id = None
+        if not self.dev_smoke_running:
+            return
+        if self.dev_smoke_index >= len(self.dev_smoke_steps):
+            self._dev_smoke_finish()
+            return
+        name, fn = self.dev_smoke_steps[self.dev_smoke_index]
+        ok = True
+        detail = ""
+        next_delay_ms = int(self.dev_smoke_delay_ms)
+        try:
+            out = fn()
+            if isinstance(out, dict):
+                detail = str(out.get("detail", "") or "")
+                try:
+                    next_delay_ms = int(out.get("delay_ms", self.dev_smoke_delay_ms))
+                except Exception:
+                    next_delay_ms = int(self.dev_smoke_delay_ms)
+            else:
+                detail = str(out) if out is not None else ""
+        except Exception as exc:
+            ok = False
+            detail = str(exc)
+        self.dev_smoke_results.append((name, ok, detail))
+        state = "PASS" if ok else "FAIL"
+        color = COLORS["SUCCESS"] if ok else COLORS["DANGER"]
+        self._dev_smoke_overlay_show(
+            f"DEV SMOKE {self.dev_smoke_index + 1}/{len(self.dev_smoke_steps)} {state}: {name}{(' | ' + detail) if detail else ''}",
+            color,
+        )
+        self.dev_smoke_index += 1
+        if self.dev_smoke_running:
+            self.dev_smoke_after_id = self.root.after(max(20, int(next_delay_ms)), self._dev_smoke_run_next)
+    def _dev_smoke_color_slots_for_button(self, index):
+        base_h = (float(index) * 0.123) % 1.0
+        slots = []
+        for sidx, offset in enumerate((0.00, 0.17, 0.34, 0.51)):
+            h = (base_h + offset) % 1.0
+            sat = 0.95 if (sidx % 2 == 0) else 0.80
+            val = 1.00 if sidx < 3 else 0.85
+            r, g, b = colorsys.hsv_to_rgb(h, sat, val)
+            slots.append((int(r * 255), int(g * 255), int(b * 255)))
+        return slots
+    def _dev_smoke_clone(self, value):
+        try:
+            return json.loads(json.dumps(value))
+        except Exception:
+            try:
+                return copy.deepcopy(value)
+            except Exception:
+                return value
+    def _dev_smoke_init_context(self):
+        rom_key = "smoketest"
+        keymap_name = "SmokeTest"
+        keymap_path = os.path.join(self.keymap_dir, f"{keymap_name}.json")
+        ctx = {
+            "rom_key": rom_key,
+            "title": "SmokeTest",
+            "keymap_name": keymap_name,
+            "keymap_path": keymap_path,
+            "fx_name": "Smoke Test",
+            "start_anim_name": "SmokeTest_Start",
+            "end_anim_name": "SmokeTest_End",
+            "created_fx_id": "",
+            "created_temp_files": [],
+            "backup_game_entry": self._dev_smoke_clone(self.game_db.get(rom_key)) if rom_key in self.game_db else None,
+            "backup_anim_start": self._dev_smoke_clone(self.animation_library.get("SmokeTest_Start")) if "SmokeTest_Start" in self.animation_library else None,
+            "backup_anim_end": self._dev_smoke_clone(self.animation_library.get("SmokeTest_End")) if "SmokeTest_End" in self.animation_library else None,
+            "backup_keymap_text": None,
+        }
+        try:
+            if os.path.exists(keymap_path):
+                with open(keymap_path, "r", encoding="utf-8") as f:
+                    ctx["backup_keymap_text"] = f.read()
+        except Exception:
+            ctx["backup_keymap_text"] = None
+        return ctx
+    def _dev_smoke_select_listbox_item(self, listbox, target_text):
+        if not listbox:
+            return False
+        target = str(target_text or "").strip().lower()
+        for i in range(listbox.size()):
+            value = str(listbox.get(i)).strip().lower()
+            if value == target:
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(i)
+                listbox.activate(i)
+                listbox.see(i)
+                return True
+        return False
+    def _dev_smoke_input_get(self, target):
+        if target is None:
+            return ""
+        if hasattr(target, "get"):
+            try:
+                return str(target.get())
+            except Exception:
+                pass
+        return ""
+    def _dev_smoke_input_set(self, target, value):
+        if target is None:
+            return
+        text = "" if value is None else str(value)
+        # tk.StringVar path
+        if hasattr(target, "set"):
+            try:
+                target.set(text)
+                return
+            except Exception:
+                pass
+        # tk.Entry path
+        if hasattr(target, "delete") and hasattr(target, "insert"):
+            try:
+                target.delete(0, tk.END)
+                if text:
+                    target.insert(0, text)
+            except Exception:
+                pass
+    def _dev_smoke_select_rom_in_mapped_list(self, listbox, mapping, rom_key):
+        if not listbox:
+            return False
+        target = str(rom_key or "").strip().lower()
+        for i in range(listbox.size()):
+            label = str(listbox.get(i))
+            resolved = mapping.get(label, label) if isinstance(mapping, dict) else label
+            if str(resolved).strip().lower() == target:
+                listbox.selection_clear(0, tk.END)
+                listbox.selection_set(i)
+                listbox.activate(i)
+                listbox.see(i)
+                return True
+        return False
+    def _dev_smoke_find_audio_asset(self):
+        for name in ("SmokeTest.mp3", "SmokeTest.MP3", "smoketest.mp3", "smoketest.MP3"):
+            p = asset_path(name)
+            if p and os.path.exists(p):
+                return p
+        assets_dir = os.path.dirname(asset_path("placeholder.bin"))
+        if os.path.isdir(assets_dir):
+            for fn in os.listdir(assets_dir):
+                if str(fn).lower() == "smoketest.mp3":
+                    p = os.path.join(assets_dir, fn)
+                    if os.path.exists(p):
+                        return p
+        return ""
+    def _dev_smoke_trim_analysis(self, analysis, start_ratio=0.15, end_ratio=0.85):
+        if not isinstance(analysis, dict):
+            return {}
+        start = max(0.0, min(1.0, float(start_ratio)))
+        end = max(0.0, min(1.0, float(end_ratio)))
+        if end <= start:
+            end = min(1.0, start + 0.01)
+        rms = analysis.get("rms", []) or []
+        frame_count = len(rms)
+        if frame_count <= 0:
+            return dict(analysis)
+        s_idx = int(start * frame_count)
+        e_idx = int(end * frame_count)
+        s_idx = max(0, min(frame_count - 1, s_idx))
+        e_idx = max(s_idx + 1, min(frame_count, e_idx))
+        def _slice(seq):
+            seq = seq or []
+            return seq[s_idx:e_idx]
+        trimmed = dict(analysis)
+        trimmed["rms"] = _slice(analysis.get("rms", []))
+        trimmed["bass"] = _slice(analysis.get("bass", []))
+        trimmed["mid"] = _slice(analysis.get("mid", []))
+        trimmed["treble"] = _slice(analysis.get("treble", []))
+        trimmed["onsets"] = [i - s_idx for i in (analysis.get("onsets", []) or []) if s_idx <= i < e_idx]
+        trimmed["beats"] = [i - s_idx for i in (analysis.get("beats", []) or []) if s_idx <= i < e_idx]
+        return trimmed
+    def _dev_smoke_controls_for_button_map(self, rom_key, button_map):
+        map_name = str(button_map or "Current Deck").strip() or "Current Deck"
+        if map_name != "Current Deck":
+            self._refresh_keymap_library()
+            km = self.keymap_library.get(map_name, {}) if isinstance(getattr(self, "keymap_library", {}), dict) else {}
+            controls = km.get("controls", {}) if isinstance(km, dict) else {}
+            if isinstance(controls, dict) and controls:
+                return controls
+        entry = self.game_db.get(rom_key, {}) if isinstance(getattr(self, "game_db", None), dict) else {}
+        controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+        return controls if isinstance(controls, dict) else {}
+    def _dev_smoke_ensure_hw_connected(self):
+        if self.is_connected():
+            return True
+        try:
+            if hasattr(self, "cab") and hasattr(self.cab, "reconnect"):
+                try:
+                    self.cab.reconnect(getattr(self, "port", None), timeout=0.35)
+                except TypeError:
+                    self.cab.reconnect(getattr(self, "port", None))
+        except Exception:
+            pass
+        return self.is_connected()
+    def _dev_smoke_trigger_profile_event(self, rom_key, event_name):
+        event_key = str(event_name or "").strip().upper()
+        if not event_key:
+            return "no_event"
+        entry = self.game_db.get(rom_key, {}) if isinstance(getattr(self, "game_db", None), dict) else {}
+        profile = entry.get("profile", {}) if isinstance(entry, dict) else {}
+        events = profile.get("events", {}) if isinstance(profile, dict) else {}
+        evt_val = events.get(event_key)
+        anim_name = ""
+        button_map = "Current Deck"
+        if isinstance(evt_val, dict):
+            anim_name = str(evt_val.get("animation", "")).strip()
+            button_map = str(evt_val.get("button_map", "Current Deck") or "Current Deck")
+        elif evt_val:
+            anim_name = str(evt_val).strip()
+        if not anim_name:
+            if event_key == "GAME_START":
+                anim_name = str(profile.get("fx_on_start", "")).strip()
+            elif event_key == "GAME_QUIT":
+                anim_name = str(profile.get("fx_on_end", "")).strip()
+        hw_connected = self._dev_smoke_ensure_hw_connected()
+        controls = self._dev_smoke_controls_for_button_map(rom_key, button_map)
+        if controls:
+            self._load_controls_into_commander_preview(controls, apply_hardware=bool(hw_connected))
+            self._sync_alu_emulator()
+        if not anim_name:
+            return f"{event_key}: no_animation ({button_map}){' [not connected]' if not hw_connected else ''}"
+        anim_entry = self.animation_library.get(anim_name, {}) if isinstance(getattr(self, "animation_library", {}), dict) else {}
+        sequence_keys = [event_key]
+        if event_key == "GAME_START":
+            sequence_keys.append("START")
+        elif event_key == "GAME_QUIT":
+            sequence_keys.append("END")
+        seq = []
+        if isinstance(anim_entry, dict):
+            event_block = anim_entry.get("events", {})
+            if isinstance(event_block, dict):
+                for key in sequence_keys:
+                    seq = event_block.get(key, [])
+                    if isinstance(seq, list) and seq:
+                        break
+        if seq and hw_connected:
+            self._alu_start_animation_sequence(seq)
+            return f"{event_key}: {anim_name} ({button_map}) seq={len(seq)}"
+        if hw_connected:
+            self.preview_animation(anim_name)
+            return f"{event_key}: {anim_name} ({button_map})"
+        # No hardware connection: keep emulator/deck map synced and continue without raising.
+        self._dev_smoke_log(f"Event {event_key} skipped live animation (not connected): {anim_name}")
+        return f"{event_key}: {anim_name} ({button_map}) [not connected]"
+    def _dev_smoke_assign_gm_event(self, event_name, anim_name, button_map):
+        if "btn_map_list" not in self.gm_fields or "anim_list" not in self.gm_fields or "event_list" not in self.gm_fields:
+            return False
+        ok_map = self._dev_smoke_select_listbox_item(self.gm_fields["btn_map_list"], button_map)
+        ok_anim = self._dev_smoke_select_listbox_item(self.gm_fields["anim_list"], anim_name)
+        ok_evt = self._dev_smoke_select_listbox_item(self.gm_fields["event_list"], event_name)
+        if not (ok_map and ok_anim and ok_evt):
+            return False
+        self._gm_assign_event()
+        return True
+    def _dev_smoke_step_commander(self):
+        self.notebook.select(self.tab_main)
+        self.root.update_idletasks()
+        if hasattr(self, "_refresh_game_list"):
+            self._refresh_game_list()
+        total = int(self.game_list.size()) if hasattr(self, "game_list") else 0
+        if total <= 0:
+            raise RuntimeError("Commander game list is empty")
+        # Exercise search filter path.
+        prior_q = self._dev_smoke_input_get(self.game_search) if hasattr(self, "game_search") else ""
+        if hasattr(self, "game_search"):
+            self._dev_smoke_input_set(self.game_search, "x")
+            self._refresh_game_list()
+            filtered = int(self.game_list.size())
+            self._dev_smoke_log(f"Commander filter 'x' -> {filtered} rows")
+            self._dev_smoke_input_set(self.game_search, prior_q if prior_q is not None else "")
+            self._refresh_game_list()
+            total = int(self.game_list.size())
+        # Build a deterministic 4-slot multicolor profile across all buttons.
+        keys = sorted(self.led_state.keys()) if isinstance(getattr(self, "led_state", None), dict) else []
+        if not keys:
+            raise RuntimeError("Commander LED state is unavailable")
+        for idx, key in enumerate(keys):
+            slots = self._dev_smoke_color_slots_for_button(idx)
+            d = self.led_state.get(key, {})
+            d["colors"] = list(slots)
+            d["primary"] = slots[0]
+            d["secondary"] = slots[1]
+            d["pulse"] = False
+            d["fx_mode"] = None
+            d["phase"] = 0.0
+            d["speed"] = 1.0
+            d["fx"] = [None, None, None, None]
+            self.led_state[key] = d
+        self.refresh_gui_from_state()
+        self._sync_alu_emulator()
+
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        smoke_title = str(ctx.get("title", "SmokeTest"))
+        keymap_name = str(ctx.get("keymap_name", "SmokeTest"))
+        keymap_path = str(ctx.get("keymap_path", os.path.join(self.keymap_dir, f"{keymap_name}.json")))
+        controls = self._collect_controls_from_led_state(include_slots=True)
+        if not controls:
+            raise RuntimeError("Failed to capture commander controls")
+        entry = self.game_db.get(rom_key, {})
+        profile = entry.get("profile", {}) if isinstance(entry.get("profile"), dict) else {}
+        profile.setdefault("controller_mode", "ARCADE_PANEL")
+        profile.setdefault("lighting_policy", "AUTO")
+        entry["profile"] = profile
+        entry["controls"] = controls
+        entry["vendor"] = "Arcade Commander"
+        entry["override_enabled"] = True
+        md = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
+        md.update(
+            {
+                "title": smoke_title,
+                "year": str(time.localtime().tm_year),
+                "manufacturer": "Arcade Commander",
+                "players": "2",
+                "genre": "Diagnostics / Smoke Test",
+                "source": "dev_smoke",
+                "description": "Automated Commander smoke-test profile with 4-slot multicolor button mapping.",
+            }
+        )
+        entry["metadata"] = md
+        self.game_db[rom_key] = entry
+        self._save_game_db()
+
+        # Save keymap set as SmokeTest.
+        os.makedirs(self.keymap_dir, exist_ok=True)
+        with open(keymap_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "name": keymap_name,
+                    "controls": controls,
+                    "saved_at": time.time(),
+                    "source": "dev_smoke",
+                },
+                f,
+                indent=2,
+            )
+        self._refresh_keymap_library()
+
+        # Refresh shared game catalogs/lists so SmokeTest is available everywhere.
+        self.game_rows, self.game_col_map = self._load_game_catalog()
+        self.game_title_key = self.game_col_map.get("title")
+        self.gm_rows = list(self.game_rows)
+        self.gm_title_key = self.game_title_key
+        self._refresh_game_list()
+        if hasattr(self, "_refresh_gm_list"):
+            self._refresh_gm_list()
+        if hasattr(self, "_refresh_fx_list"):
+            self._refresh_fx_list()
+        if hasattr(self, "_alu_refresh_list"):
+            self._alu_refresh_list()
+
+        # Select SmokeTest in Commander and verify ROM resolution.
+        if hasattr(self, "game_search"):
+            self._dev_smoke_input_set(self.game_search, "")
+            self._refresh_game_list()
+        smoke_idx = None
+        if hasattr(self, "game_list"):
+            for i in range(self.game_list.size()):
+                lbl = str(self.game_list.get(i)).strip().lower()
+                if lbl == smoke_title.lower():
+                    smoke_idx = i
+                    break
+        if smoke_idx is None:
+            raise RuntimeError(f"{smoke_title} was not found in Commander game list")
+        self.game_list.selection_clear(0, tk.END)
+        self.game_list.selection_set(smoke_idx)
+        self.game_list.activate(smoke_idx)
+        self.game_list.see(smoke_idx)
+        self._on_game_select()
+        rom = self.game_detail_vars.get("profile_rom").get() if isinstance(getattr(self, "game_detail_vars", None), dict) and self.game_detail_vars.get("profile_rom") else ""
+        if str(rom).strip().lower() != rom_key.lower():
+            raise RuntimeError(f"Commander did not resolve {smoke_title} ROM (got: {rom})")
+
+        sample = next(iter(controls.values()), "")
+        if "|" not in str(sample):
+            raise RuntimeError("SmokeTest controls were not saved as 4-slot multicolor values")
+        return f"games={total} rom={rom_key} controls={len(controls)} keymap={keymap_name}"
+    def _dev_smoke_step_fx_editor(self):
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        fx_name = str(ctx.get("fx_name", "Smoke Test"))
+        start_anim = str(ctx.get("start_anim_name", "SmokeTest_Start"))
+        end_anim = str(ctx.get("end_anim_name", "SmokeTest_End"))
+        keymap_name = str(ctx.get("keymap_name", "SmokeTest"))
+        self.notebook.select(self.tab_fx_editor)
+        self.root.update_idletasks()
+        if hasattr(self, "_refresh_fx_list"):
+            self._refresh_fx_list()
+        if not hasattr(self, "fx_list") or int(self.fx_list.size()) <= 0:
+            raise RuntimeError("FX game list is empty")
+        if not self._dev_smoke_select_rom_in_mapped_list(self.fx_list, getattr(self, "fx_title_to_rom", {}), rom_key):
+            raise RuntimeError("SmokeTest was not found in FX game list")
+        self._on_fx_select()
+        # Assign Full Range to all buttons in FX Editor assignment matrix.
+        if "assign_var" in self.fx_editor_state and "assign_group_var" in self.fx_editor_state:
+            self.fx_editor_state["assign_var"].set("Full Range")
+            self.fx_editor_state["assign_group_var"].set("All")
+            self._fx_editor_assign(notify=False)
+        else:
+            for btn in sorted(self.led_state.keys()):
+                self.fx_assignments[btn] = "Full Range"
+        # Build audio-driven sequence from assets/SmokeTest.mp3.
+        audio_asset = self._dev_smoke_find_audio_asset()
+        if not audio_asset:
+            raise RuntimeError("SmokeTest.mp3 not found in assets folder")
+        if not (AUDIOFX_AVAILABLE and getattr(self, "audio_engine", None)):
+            raise RuntimeError("AudioFXEngine not available for smoke test")
+        wav_path, tmp_path = self._prepare_audio_wav(audio_asset)
+        if tmp_path and os.path.exists(tmp_path):
+            ctx.setdefault("created_temp_files", []).append(tmp_path)
+        analysis = self.audio_engine.analyze_wav(wav_path)
+        trimmed = self._dev_smoke_trim_analysis(analysis, start_ratio=0.15, end_ratio=0.85)
+        frame_count = len(trimmed.get("rms", []) or [])
+        if frame_count < 2:
+            raise RuntimeError("SmokeTest trimmed audio range is too small")
+        sequence = self.audio_engine.build_sequence(trimmed)
+        meta = sequence.get("meta", {}) if isinstance(sequence.get("meta", {}), dict) else {}
+        meta["trim_start_pct"] = 15.0
+        meta["trim_end_pct"] = 85.0
+        meta["trim_frames"] = int(frame_count)
+        meta["source"] = "dev_smoke"
+        sequence["meta"] = meta
+        # Save effect to FX library as "Smoke Test".
+        if not self.fx_library:
+            raise RuntimeError("FX library not available")
+        editor_state = self._fx_editor_collect_state()
+        effect = FXEffect(
+            fx_id="",
+            name=fx_name,
+            entrance=sequence.get("entrance", {}),
+            main=sequence.get("main", {}),
+            exit=sequence.get("exit", {}),
+            audio_path=os.path.basename(audio_asset),
+            applied_to=sorted(list(self.fx_assignments.keys())),
+            meta={"source": "dev_smoke_audio", "editor_state": editor_state},
+        )
+        fx_id = self.fx_library.save_fx(effect)
+        ctx["created_fx_id"] = fx_id
+        # Build start/end animations from the same audio sequence.
+        self.animation_library[start_anim] = {
+            "events": {"GAME_START": [{"anim": "TEASE", "duration": 30.0}]},
+            "audio_sequence": sequence,
+            "meta": {"source": "dev_smoke_audio", "audio_path": os.path.basename(audio_asset), "role": "start"},
+        }
+        self.animation_library[end_anim] = {
+            "events": {"GAME_QUIT": [{"anim": "PULSE_BLUE", "duration": 30.0}]},
+            "audio_sequence": sequence,
+            "meta": {"source": "dev_smoke_audio", "audio_path": os.path.basename(audio_asset), "role": "end"},
+        }
+        self._save_animation_library()
+        if hasattr(self, "_fx_editor_refresh_animation_library"):
+            self._fx_editor_refresh_animation_library()
+        if hasattr(self, "_fx_tab_library_refresh"):
+            self._fx_tab_library_refresh()
+        # Update SmokeTest profile with start/end and event map.
+        entry = self.game_db.get(rom_key, {})
+        profile = entry.setdefault("profile", {})
+        events = profile.setdefault("events", {})
+        profile["fx_on_start"] = "TEASE"
+        profile["fx_on_end"] = "PULSE_BLUE"
+        events["GAME_START"] = {"animation": start_anim, "button_map": keymap_name}
+        events["GAME_QUIT"] = {"animation": end_anim, "button_map": keymap_name}
+        entry["profile"] = profile
+        entry["fx_id"] = fx_id
+        self.game_db[rom_key] = entry
+        self._save_game_db()
+        self._refresh_game_list()
+        self._refresh_gm_list()
+        self._refresh_fx_list()
+        self._alu_refresh_list()
+        return f"rom={rom_key} fx='{fx_name}' start='{start_anim}' end='{end_anim}' frames={frame_count}"
+    def _dev_smoke_step_game_manager(self):
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        keymap_name = str(ctx.get("keymap_name", "SmokeTest"))
+        start_anim = str(ctx.get("start_anim_name", "SmokeTest_Start"))
+        end_anim = str(ctx.get("end_anim_name", "SmokeTest_End"))
+        self.notebook.select(self.tab_gm)
+        self.root.update_idletasks()
+        self._refresh_gm_list()
+        total = int(self.gm_list.size()) if hasattr(self, "gm_list") else 0
+        if total <= 0:
+            raise RuntimeError("Game Manager list is empty")
+        if hasattr(self, "gm_search"):
+            self._dev_smoke_input_set(self.gm_search, "smoketest")
+            self._refresh_gm_list()
+        if not self._dev_smoke_select_rom_in_mapped_list(self.gm_list, getattr(self, "gm_title_to_rom", {}), rom_key):
+            # Fallback for older GM list variants where item text resolves directly.
+            found = False
+            for i in range(self.gm_list.size()):
+                label = str(self.gm_list.get(i)).strip().lower()
+                if "smoketest" in label:
+                    self.gm_list.selection_clear(0, tk.END)
+                    self.gm_list.selection_set(i)
+                    self.gm_list.activate(i)
+                    self.gm_list.see(i)
+                    found = True
+                    break
+            if not found:
+                raise RuntimeError("SmokeTest was not found in Game Manager list")
+        self._on_gm_select()
+        ok_start = self._dev_smoke_assign_gm_event("GAME_START", start_anim, keymap_name)
+        ok_end = self._dev_smoke_assign_gm_event("GAME_QUIT", end_anim, keymap_name)
+        if not (ok_start and ok_end):
+            raise RuntimeError("Failed to assign SmokeTest start/end events in Game Manager")
+        return f"gm_assign start={start_anim} end={end_anim} map={keymap_name}"
+    def _dev_smoke_step_emulator(self):
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        self.notebook.select(self.tab_alu)
+        self.root.update_idletasks()
+        self._alu_refresh_list()
+        total = int(self.alu_listbox.size()) if hasattr(self, "alu_listbox") else 0
+        if total <= 0:
+            raise RuntimeError("Emulator list is empty")
+        if hasattr(self, "alu_search_var"):
+            self.alu_search_var.set("smoketest")
+            self._alu_refresh_list()
+        if not self._dev_smoke_select_rom_in_mapped_list(self.alu_listbox, getattr(self, "alu_label_to_rom", {}), rom_key):
+            raise RuntimeError("SmokeTest was not found in Emulator list")
+        self._alu_on_select()
+        self._alu_load_selected()
+        # Push mapped controls to physical deck before smoke start trigger (if connected).
+        hw_connected = self._dev_smoke_ensure_hw_connected()
+        if hw_connected:
+            self._alu_apply_to_control_deck(rom_key)
+        loaded_rom = str(getattr(self, "alu_last_rom", "") or "")
+        if loaded_rom.lower() != rom_key.lower():
+            raise RuntimeError(f"Emulator loaded wrong ROM: {loaded_rom}")
+        detail = self._dev_smoke_trigger_profile_event(rom_key, "GAME_START")
+        return f"games={total} rom={loaded_rom} hw={'connected' if hw_connected else 'not_connected'} start={detail}"
+    def _dev_smoke_step_wait_start(self):
+        return {"detail": "START event hold for 30s", "delay_ms": 30000}
+    def _dev_smoke_step_emulator_end(self):
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        self.stop_animation()
+        detail = self._dev_smoke_trigger_profile_event(rom_key, "GAME_QUIT")
+        return f"end={detail}"
+    def _dev_smoke_step_wait_end(self):
+        return {"detail": "END event hold for 30s", "delay_ms": 30000}
+    def _dev_smoke_step_cleanup(self):
+        ctx = self.dev_smoke_ctx if isinstance(getattr(self, "dev_smoke_ctx", None), dict) else {}
+        rom_key = str(ctx.get("rom_key", "smoketest"))
+        fx_name = str(ctx.get("fx_name", "Smoke Test"))
+        keymap_path = str(ctx.get("keymap_path", os.path.join(self.keymap_dir, "SmokeTest.json")))
+        start_anim = str(ctx.get("start_anim_name", "SmokeTest_Start"))
+        end_anim = str(ctx.get("end_anim_name", "SmokeTest_End"))
+        removed = []
+        smoke_target = "smoketest"
+
+        def _norm_smoke(value):
+            return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+        def _is_smoke_value(value):
+            return smoke_target in _norm_smoke(value)
+
+        self.stop_animation()
+        if getattr(self, "_alu_anim_seq_after_id", None):
+            try:
+                self.root.after_cancel(self._alu_anim_seq_after_id)
+            except Exception:
+                pass
+            self._alu_anim_seq_after_id = None
+        # Always remove SmokeTest FX artifacts by id/name/source.
+        if self.fx_library:
+            try:
+                fx_db = self.fx_library._db.get("fx", {}) if isinstance(self.fx_library._db, dict) else {}
+                remove_ids = set()
+                fx_id = str(ctx.get("created_fx_id", "") or "")
+                if fx_id:
+                    remove_ids.add(fx_id)
+                for fid, fx in list(fx_db.items()):
+                    fx_obj = fx if isinstance(fx, dict) else {}
+                    name = str(fx_obj.get("name", "")).strip()
+                    meta = fx_obj.get("meta", {}) if isinstance(fx_obj.get("meta"), dict) else {}
+                    source = str(meta.get("source", "")).strip().lower()
+                    if _is_smoke_value(name) or _is_smoke_value(fid) or "dev_smoke" in source:
+                        remove_ids.add(str(fid))
+                if fx_name:
+                    for fid, fx in list(fx_db.items()):
+                        name = str((fx or {}).get("name", "")).strip().lower() if isinstance(fx, dict) else ""
+                        if name == fx_name.strip().lower():
+                            remove_ids.add(str(fid))
+                for fid in list(remove_ids):
+                    key = str(fid)
+                    if key in fx_db:
+                        del fx_db[key]
+                        removed.append(f"fx:{key}")
+                if remove_ids:
+                    self.fx_library._save()
+            except Exception:
+                pass
+        # Always remove SmokeTest game entries.
+        removed_games = []
+        for rk, entry in list(self.game_db.items()):
+            try:
+                rk_s = str(rk or "")
+                if rk_s.strip().lower() == rom_key.strip().lower():
+                    removed_games.append(rk_s)
+                    continue
+                data = entry if isinstance(entry, dict) else {}
+                md = data.get("metadata", {}) if isinstance(data.get("metadata"), dict) else {}
+                source = str(md.get("source", "")).strip().lower()
+                title = str(md.get("title", "")).strip()
+                if "dev_smoke" in source or _is_smoke_value(title) or _is_smoke_value(rk_s):
+                    removed_games.append(rk_s)
+            except Exception:
+                continue
+        for rk in removed_games:
+            if rk in self.game_db:
+                self.game_db.pop(rk, None)
+                removed.append(f"game:{rk}")
+        self._save_game_db()
+        # Always remove SmokeTest keymap/profile files.
+        removed_file_paths = set()
+        candidate_files = [keymap_path, profile_file("SmokeTest.json"), profile_file("smoketest.json")]
+        for p in ctx.get("created_temp_files", []):
+            if p:
+                candidate_files.append(str(p))
+        for p in candidate_files:
+            try:
+                if p and os.path.exists(p):
+                    os.unlink(p)
+                    removed_file_paths.add(os.path.abspath(p))
+                    removed.append(f"file:{os.path.basename(p)}")
+            except Exception:
+                pass
+        try:
+            if os.path.isdir(self.keymap_dir):
+                for fn in os.listdir(self.keymap_dir):
+                    if not str(fn).lower().endswith(".json"):
+                        continue
+                    fp = os.path.join(self.keymap_dir, fn)
+                    if os.path.abspath(fp) in removed_file_paths:
+                        continue
+                    kill = _is_smoke_value(fn)
+                    if not kill:
+                        try:
+                            with open(fp, "r", encoding="utf-8") as f:
+                                payload = json.load(f)
+                            src = str(payload.get("source", "")).strip().lower() if isinstance(payload, dict) else ""
+                            name = str(payload.get("name", "")).strip() if isinstance(payload, dict) else ""
+                            if "dev_smoke" in src or _is_smoke_value(name):
+                                kill = True
+                        except Exception:
+                            kill = _is_smoke_value(fn)
+                    if kill:
+                        try:
+                            os.unlink(fp)
+                            removed_file_paths.add(os.path.abspath(fp))
+                            removed.append(f"keymap:{fn}")
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        # Always remove SmokeTest animations (name and source scan).
+        remove_anim_keys = set()
+        for name, anim in list(self.animation_library.items()):
+            name_s = str(name or "")
+            anim_obj = anim if isinstance(anim, dict) else {}
+            meta = anim_obj.get("meta", {}) if isinstance(anim_obj.get("meta"), dict) else {}
+            source = str(meta.get("source", "")).strip().lower()
+            audio_path = str(meta.get("audio_path", "")).strip()
+            if name_s in (start_anim, end_anim) or _is_smoke_value(name_s) or "dev_smoke" in source or _is_smoke_value(audio_path):
+                remove_anim_keys.add(name_s)
+        for name in remove_anim_keys:
+            if name in self.animation_library:
+                self.animation_library.pop(name, None)
+                removed.append(f"anim:{name}")
+        if remove_anim_keys:
+            self._save_animation_library()
+        # Safety pass: remove any SmokeTest audio conversion files in temp dir.
+        try:
+            tmp_root = tempfile.gettempdir()
+            for fn in os.listdir(tmp_root):
+                if not _is_smoke_value(fn):
+                    continue
+                fp = os.path.join(tmp_root, fn)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    os.unlink(fp)
+                    removed.append(f"tmp:{fn}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Cleanup temporary WAV files created during smoke audio conversion.
+        for p in ctx.get("created_temp_files", []):
+            try:
+                if p and os.path.exists(p):
+                    os.unlink(p)
+                    removed.append(f"tmp:{os.path.basename(p)}")
+            except Exception:
+                pass
+        self._refresh_keymap_library()
+        if hasattr(self, "_fx_editor_refresh_animation_library"):
+            self._fx_editor_refresh_animation_library()
+        if hasattr(self, "_fx_tab_library_refresh"):
+            self._fx_tab_library_refresh()
+        self._refresh_game_list()
+        self._refresh_gm_list()
+        self._refresh_fx_list()
+        self._alu_refresh_list()
+        self.dev_smoke_ctx = {}
+        return f"cleanup removed={len(removed)}"
+    def _dev_smoke_step_controller(self):
+        self.notebook.select(self.tab_controller)
+        self.root.update_idletasks()
+        # Exercise summary recompute by toggling one non-destructive option.
+        if hasattr(self, "controller_vars") and isinstance(self.controller_vars, dict) and self.controller_vars.get("include_coin"):
+            v = bool(self.controller_vars["include_coin"].get())
+            self.controller_vars["include_coin"].set(not v)
+            self.controller_vars["include_coin"].set(v)
+        self._controller_update_summary()
+        summary = self.controller_summary.get().strip() if hasattr(self, "controller_summary") else ""
+        if not summary:
+            raise RuntimeError("Controller summary not available")
+        return "summary=ok"
+    def _dev_smoke_step_return_home(self):
+        self.notebook.select(self.tab_main)
+        self.root.update_idletasks()
+        return "home"
     def create_visual_btn(self, p, n, r, c, pack=False, width=6, height=2):
         l = "BALL" if n == "TRACKBALL" else n.split("_")[-1]
         b = MultiColorButton(p, text=l, width=width, height=height)
@@ -2848,6 +4041,7 @@ class ArcadeGUI_V2:
 
         ctrl = self.pulse_controls.setdefault(grp_name, {})
         ctrl['buttons'] = bl
+        ctrl['theme_btn'] = t_btn
         ctrl['mode_vars'] = {}
         ctrl['current_mode'] = None
 
@@ -2930,6 +4124,7 @@ class ArcadeGUI_V2:
         self.led_state[n]['secondary'] = self.led_state[n]['colors'][1]
         if n in self.buttons:
             self.buttons[n].set_colors([self._rgb_to_hex(*c) for c in self.led_state[n]['colors']])
+        self._refresh_group_theme_swatch_for_button(n)
         if idx == 0 and self.is_connected() and not self.led_state[n].get('pulse'):
             self.cab.set(n, rgb); self.cab.show()
             self._sync_alu_emulator({n: rgb})
@@ -3016,6 +4211,29 @@ class ArcadeGUI_V2:
     def _set_group_slot_color(self, bl, idx, rgb):
         for n in bl:
             self._set_slot_color(n, idx, rgb)
+        self._refresh_group_theme_swatch(bl)
+
+    def _refresh_group_theme_swatch(self, bl):
+        if not bl or not hasattr(self, "pulse_controls"):
+            return
+        grp_name = f"GROUP_{bl[0]}"
+        ctrl = self.pulse_controls.get(grp_name, {}) if isinstance(self.pulse_controls, dict) else {}
+        btn = ctrl.get("theme_btn") if isinstance(ctrl, dict) else None
+        if btn:
+            self._apply_group_button_colors(btn, bl, "theme")
+
+    def _refresh_group_theme_swatch_for_button(self, btn_name):
+        if not btn_name or not hasattr(self, "pulse_controls") or not isinstance(self.pulse_controls, dict):
+            return
+        for ctrl in self.pulse_controls.values():
+            if not isinstance(ctrl, dict):
+                continue
+            bl = ctrl.get("buttons")
+            tbtn = ctrl.get("theme_btn")
+            if not tbtn or not isinstance(bl, (list, tuple)):
+                continue
+            if btn_name in bl:
+                self._apply_group_button_colors(tbtn, bl, "theme")
 
     def _copy_group_slot_color(self, bl, idx):
         if not bl:
@@ -3299,6 +4517,23 @@ class ArcadeGUI_V2:
         except Exception:
             pass
         return [slots[0]]
+    def _format_rgb_slot(self, rgb):
+        c = self._coerce_rgb_slot(rgb) or (0, 0, 0)
+        return f"{int(c[0])},{int(c[1])},{int(c[2])}"
+    def _serialize_button_slots(self, key):
+        slots = self._get_button_color_slots(key, keep_black=True)
+        return "|".join(self._format_rgb_slot(c) for c in slots[:4])
+    def _collect_controls_from_led_state(self, include_slots=True):
+        controls = {}
+        if not hasattr(self, "led_state") or not isinstance(self.led_state, dict):
+            return controls
+        for key in sorted(self.led_state.keys()):
+            if include_slots:
+                controls[key] = self._serialize_button_slots(key)
+            else:
+                primary = self._get_button_color_slots(key, keep_black=True)[0]
+                controls[key] = self._format_rgb_slot(primary)
+        return controls
     def _slot_cycle_color_rgb(self, key, elapsed_sec, speed=2.0, phase_offset=0.0, keep_black=False):
         slots = self._get_button_color_slots(key, keep_black=keep_black)
         if not slots:
@@ -3315,16 +4550,25 @@ class ArcadeGUI_V2:
         if mode == 'c4': return 3
         return None
     def build_game_manager_tab(self):
-        wrap = tk.Frame(self.tab_gm, bg=COLORS["BG"])
-        wrap.pack(expand=True, fill="both", padx=20, pady=20)
+        gm_container = tk.Frame(self.tab_gm, bg=COLORS["BG"])
+        gm_container.pack(expand=True, fill="both", padx=20, pady=20)
+        gm_canvas = tk.Canvas(gm_container, bg=COLORS["BG"], highlightthickness=0, borderwidth=0)
+        gm_canvas.pack(side="left", fill="both", expand=True)
+        wrap = tk.Frame(gm_canvas, bg=COLORS["BG"])
+        gm_canvas_window = gm_canvas.create_window((0, 0), window=wrap, anchor="nw")
+        wrap.bind("<Configure>", lambda _e: gm_canvas.configure(scrollregion=gm_canvas.bbox("all")))
+        gm_canvas.bind("<Configure>", lambda e: gm_canvas.itemconfigure(gm_canvas_window, width=e.width))
         wrap.columnconfigure(0, weight=2)
         wrap.columnconfigure(1, weight=3)
         wrap.rowconfigure(0, weight=1)
+        wrap.rowconfigure(1, weight=0)
 
         left = tk.Frame(wrap, bg=COLORS["CHARCOAL"])
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         right = tk.Frame(wrap, bg=COLORS["CHARCOAL"])
         right.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        bottom = tk.Frame(wrap, bg=COLORS["CHARCOAL"])
+        bottom.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         tk.Label(left, text="GAME LIBRARY", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 10, "bold")).pack(anchor="w")
         search_row = tk.Frame(left, bg=COLORS["CHARCOAL"])
         search_row.pack(fill="x", pady=(6, 6))
@@ -3348,6 +4592,7 @@ class ArcadeGUI_V2:
                                   selectbackground=COLORS["P1"], selectforeground="black", font=("Segoe UI", 9))
         self.gm_list.pack(side="left", fill="both", expand=True)
         vsb = tk.Scrollbar(list_wrap, orient="vertical", command=self.gm_list.yview)
+        self._style_scrollbar(vsb)
         vsb.pack(side="right", fill="y")
         self.gm_list.configure(yscrollcommand=vsb.set)
         self.gm_list.bind("<<ListboxSelect>>", self._on_gm_select)
@@ -3361,10 +4606,21 @@ class ArcadeGUI_V2:
             row.pack(fill="x", pady=2)
             tk.Label(row, text=f"{label}:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
             var = tk.StringVar(value="")
-            ent = tk.Entry(row, textvariable=var, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
             if readonly:
-                ent.configure(state="readonly")
-            ent.pack(side="left", fill="x", expand=True)
+                # Use a label for readonly fields to avoid platform/theme readonly Entry rendering issues.
+                ent = tk.Label(
+                    row,
+                    textvariable=var,
+                    bg=COLORS["SURFACE_LIGHT"],
+                    fg="white",
+                    font=("Consolas", 9),
+                    anchor="w",
+                    padx=4,
+                )
+                ent.pack(side="left", fill="x", expand=True)
+            else:
+                ent = tk.Entry(row, textvariable=var, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
+                ent.pack(side="left", fill="x", expand=True)
             self.gm_fields[key] = var
 
         add_field("Title", "title")
@@ -3375,55 +4631,162 @@ class ArcadeGUI_V2:
         add_field("Recommended", "rec_platform")
         add_field("Rank", "rank")
         add_field("ROM Key", "rom_key", readonly=True)
+        add_field("Players", "players", readonly=True)
+        add_field("Input Btns", "input_buttons", readonly=True)
+        add_field("Input Type", "input_control", readonly=True)
+        add_field("Source", "source", readonly=True)
+        desc_row = tk.Frame(form, bg=COLORS["CHARCOAL"])
+        desc_row.pack(fill="x", pady=(4, 2))
+        tk.Label(
+            desc_row,
+            text="Description:",
+            width=12,
+            anchor="nw",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left", anchor="n")
+        self.gm_fields["description"] = tk.StringVar(value="")
+        tk.Label(
+            desc_row,
+            textvariable=self.gm_fields["description"],
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            font=("Segoe UI", 8),
+            anchor="w",
+            justify="left",
+            wraplength=420,
+            padx=4,
+            pady=4,
+        ).pack(side="left", fill="x", expand=True)
 
-        tk.Frame(right, bg=COLORS["SURFACE_LIGHT"], height=1).pack(fill="x", pady=8)
-        tk.Label(right, text="PROFILE", bg=COLORS["CHARCOAL"], fg=COLORS["P1"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        profile = tk.Frame(right, bg=COLORS["CHARCOAL"])
+        tk.Frame(bottom, bg=COLORS["SURFACE_LIGHT"], height=1).pack(fill="x", pady=(0, 8))
+        tk.Label(bottom, text="PROFILE", bg=COLORS["CHARCOAL"], fg=COLORS["P1"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        profile = tk.Frame(bottom, bg=COLORS["CHARCOAL"])
         profile.pack(fill="x", pady=(6, 0))
 
         self.gm_fields["vendor"] = tk.StringVar(value="")
-        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=2)
-        tk.Label(row, text="Vendor:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
-        tk.Entry(row, textvariable=self.gm_fields["vendor"], bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9)).pack(side="left", fill="x", expand=True)
-
         self.gm_fields["controller_mode"] = tk.StringVar(value="ARCADE_PANEL")
-        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=2)
-        tk.Label(row, text="Controller:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        self.gm_fields["lighting_policy"] = tk.StringVar(value="AUTO")
+        self.gm_fields["default_fx"] = tk.StringVar(value="NONE")
+        self.gm_fields["fx_on_start"] = tk.StringVar(value="NONE")
+        self.gm_fields["fx_on_end"] = tk.StringVar(value="NONE")
+        self.gm_fields["event_summary"] = tk.StringVar(value="Configured: NONE")
+
+        profile_top = tk.Frame(profile, bg=COLORS["CHARCOAL"])
+        profile_top.pack(fill="x", pady=(0, 2))
+
+        vendor_cell = tk.Frame(profile_top, bg=COLORS["CHARCOAL"])
+        vendor_cell.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(vendor_cell, text="Vendor:", anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Entry(vendor_cell, textvariable=self.gm_fields["vendor"], bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9)).pack(fill="x")
+
+        controller_cell = tk.Frame(profile_top, bg=COLORS["CHARCOAL"])
+        controller_cell.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(controller_cell, text="Controller:", anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
         ttk.Combobox(
-            row,
+            controller_cell,
             textvariable=self.gm_fields["controller_mode"],
             values=("ARCADE_PANEL", "GAMEPAD_GENERIC", "XINPUT_XBOX", "LIGHTGUN", "UNKNOWN"),
             state="readonly",
             font=("Consolas", 8),
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(fill="x")
 
-        self.gm_fields["lighting_policy"] = tk.StringVar(value="AUTO")
-        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=2)
-        tk.Label(row, text="Policy:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        policy_cell = tk.Frame(profile_top, bg=COLORS["CHARCOAL"])
+        policy_cell.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        tk.Label(policy_cell, text="Policy:", anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
         ttk.Combobox(
-            row,
+            policy_cell,
             textvariable=self.gm_fields["lighting_policy"],
             values=("AUTO", "ARCADE_ONLY", "FX_ONLY", "OFF"),
             state="readonly",
             font=("Consolas", 8),
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(fill="x")
 
-        self.gm_fields["default_fx"] = tk.StringVar(value="NONE")
-        self.gm_fields["fx_on_start"] = tk.StringVar(value="NONE")
-        self.gm_fields["fx_on_end"] = tk.StringVar(value="NONE")
+        events_cell = tk.Frame(profile_top, bg=COLORS["CHARCOAL"])
+        events_cell.pack(side="left", fill="x", expand=True)
+        tk.Label(events_cell, text="Events:", anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(
+            events_cell,
+            textvariable=self.gm_fields["event_summary"],
+            bg=COLORS["SURFACE_LIGHT"],
+            fg=COLORS["TEXT"],
+            font=("Consolas", 8),
+            anchor="w",
+            padx=4,
+        ).pack(fill="x")
 
-        self.gm_fields["event_summary"] = tk.StringVar(value="Configured: NONE")
-        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=2)
-        tk.Label(row, text="Events:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
-        tk.Label(row, textvariable=self.gm_fields["event_summary"], bg=COLORS["CHARCOAL"], fg=COLORS["TEXT"], font=("Segoe UI", 8)).pack(side="left", fill="x", expand=True)
-        details_row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); details_row.pack(fill="x", pady=(2, 6))
+        # Quick assignment row so event mapping is always obvious/accessible.
+        quick_row = tk.Frame(profile, bg=COLORS["CHARCOAL"])
+        quick_row.pack(fill="x", pady=(4, 2))
+        tk.Label(quick_row, text="Quick Assign:", width=12, anchor="w", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        quick_inner = tk.Frame(quick_row, bg=COLORS["CHARCOAL"])
+        quick_inner.pack(side="left", fill="x", expand=True)
+        self.gm_fields["quick_event"] = tk.StringVar(value="GAME_START")
+        self.gm_fields["quick_anim"] = tk.StringVar(value="")
+        self.gm_fields["quick_map"] = tk.StringVar(value="Current Deck")
+        quick_event_values = (
+            "FE_START", "FE_QUIT", "SCREENSAVER_START", "SCREENSAVER_STOP", "LIST_CHANGE",
+            "GAME_START", "GAME_QUIT", "GAME_PAUSE", "AUDIO_ANIMATION", "SPEAK_CONTROLS", "DEFAULT"
+        )
+        quick_event_combo = ttk.Combobox(
+            quick_inner,
+            textvariable=self.gm_fields["quick_event"],
+            values=quick_event_values,
+            state="readonly",
+            width=16,
+            font=("Consolas", 8),
+        )
+        quick_event_combo.pack(side="left", padx=(0, 6))
+        quick_anim_combo = ttk.Combobox(
+            quick_inner,
+            textvariable=self.gm_fields["quick_anim"],
+            values=tuple(self._gm_assignable_effect_options()),
+            state="readonly",
+            width=24,
+            font=("Consolas", 8),
+        )
+        quick_anim_combo.pack(side="left", padx=(0, 6))
+        quick_map_combo = ttk.Combobox(
+            quick_inner,
+            textvariable=self.gm_fields["quick_map"],
+            values=("Current Deck",),
+            state="readonly",
+            width=16,
+            font=("Consolas", 8),
+        )
+        quick_map_combo.pack(side="left", padx=(0, 6))
+        self.gm_fields["quick_event_combo"] = quick_event_combo
+        self.gm_fields["quick_anim_combo"] = quick_anim_combo
+        self.gm_fields["quick_map_combo"] = quick_map_combo
+        ModernButton(
+            quick_inner,
+            text="ASSIGN",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._gm_assign_quick_event,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            quick_inner,
+            text="PREVIEW",
+            bg=COLORS["P1"],
+            fg="black",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._gm_preview_quick_event,
+        ).pack(side="left")
+
+        details_row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); details_row.pack(fill="x", pady=(2, 4))
         tk.Label(details_row, text="Details:", width=12, anchor="nw", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", anchor="n")
         details_wrap = tk.Frame(details_row, bg=COLORS["CHARCOAL"])
         details_wrap.pack(side="left", fill="both", expand=True)
-        self.gm_fields["event_details"] = tk.Text(details_wrap, height=5, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["event_details"] = tk.Text(details_wrap, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                   borderwidth=0, highlightthickness=0, font=("Consolas", 8))
         self.gm_fields["event_details"].pack(side="left", fill="both", expand=True)
         details_scroll = tk.Scrollbar(details_wrap, orient="vertical", command=self.gm_fields["event_details"].yview)
+        self._style_scrollbar(details_scroll)
         details_scroll.pack(side="left", fill="y")
         self.gm_fields["event_details"].configure(yscrollcommand=details_scroll.set, state="disabled")
 
@@ -3440,17 +4803,17 @@ class ArcadeGUI_V2:
         self.gm_fields["btn_map_search"] = tk.Entry(bm_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
         self.gm_fields["btn_map_search"].pack(fill="x", pady=(2, 4))
         self.gm_fields["btn_map_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["btn_map_list"] = tk.Listbox(bm_col, height=5, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["btn_map_list"] = tk.Listbox(bm_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                     borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["btn_map_list"].pack(fill="both", expand=True)
         # Animations list
         an_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
         an_col.pack(side="left", fill="both", expand=True, padx=(6, 6))
-        tk.Label(an_col, text="ANIMATION", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold")).pack(anchor="w")
+        tk.Label(an_col, text="EFFECT / ANIMATION", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold")).pack(anchor="w")
         self.gm_fields["anim_search"] = tk.Entry(an_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
         self.gm_fields["anim_search"].pack(fill="x", pady=(2, 4))
         self.gm_fields["anim_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["anim_list"] = tk.Listbox(an_col, height=5, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["anim_list"] = tk.Listbox(an_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                  borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["anim_list"].pack(fill="both", expand=True)
         # Events list
@@ -3460,7 +4823,7 @@ class ArcadeGUI_V2:
         self.gm_fields["event_search"] = tk.Entry(ev_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
         self.gm_fields["event_search"].pack(fill="x", pady=(2, 4))
         self.gm_fields["event_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["event_list"] = tk.Listbox(ev_col, height=5, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["event_list"] = tk.Listbox(ev_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                   borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["event_list"].pack(fill="both", expand=True)
 
@@ -3468,6 +4831,29 @@ class ArcadeGUI_V2:
         assign_btn_row.pack(fill="x", pady=(6, 0))
         ModernButton(assign_btn_row, text="ASSIGN", bg=COLORS["SYS"], fg="black", width=8,
                      font=("Segoe UI", 8, "bold"), command=self._gm_assign_event).pack(side="left")
+        ModernButton(assign_btn_row, text="PREVIEW", bg=COLORS["P1"], fg="black", width=8,
+                     font=("Segoe UI", 8, "bold"), command=self._gm_preview_assignment).pack(side="left", padx=(6, 0))
+        ModernButton(assign_btn_row, text="STOP", bg=COLORS["DANGER"], fg="white", width=8,
+                     font=("Segoe UI", 8, "bold"), command=self.stop_animation).pack(side="left", padx=(6, 0))
+        self.gm_fields["preview_status"] = tk.StringVar(value="Preview: NONE")
+        tk.Label(assign_panel, textvariable=self.gm_fields["preview_status"], bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
+
+        gm_preview = tk.LabelFrame(
+            profile,
+            text=" MAP PREVIEW ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["SYS"],
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=6,
+        )
+        gm_preview.pack(fill="x", pady=(8, 0))
+        self.gm_preview_canvas = tk.Canvas(gm_preview, height=170, bg=COLORS["SURFACE"], highlightthickness=0)
+        self.gm_preview_canvas.pack(fill="x")
+        self.gm_preview_controls = {}
+        self.gm_preview_canvas.bind("<Configure>", lambda _e: self._gm_draw_map_preview(self.gm_preview_controls))
+        self._gm_draw_map_preview({})
 
         row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=6)
         tk.Checkbutton(
@@ -3480,12 +4866,10 @@ class ArcadeGUI_V2:
             font=("Segoe UI", 8, "bold"),
         ).pack(anchor="w")
 
-        btn_row = tk.Frame(right, bg=COLORS["CHARCOAL"])
-        btn_row.pack(fill="x", pady=(10, 0))
-        top_row = tk.Frame(right, bg=COLORS["CHARCOAL"])
-        top_row.pack(fill="x", pady=(0, 8))
+        action_row = tk.Frame(right, bg=COLORS["CHARCOAL"])
+        action_row.pack(fill="x", pady=(10, 0))
         ModernButton(
-            top_row,
+            action_row,
             text="LOAD DB",
             bg=COLORS["SURFACE_LIGHT"],
             fg="white",
@@ -3494,16 +4878,16 @@ class ArcadeGUI_V2:
             command=self.gm_reload_db,
         ).pack(side="left", padx=(0, 6))
         ModernButton(
-            top_row,
+            action_row,
             text="SAVE DB",
             bg=COLORS["SURFACE_LIGHT"],
             fg="white",
             width=10,
             font=("Segoe UI", 9, "bold"),
             command=self._save_game_db,
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 6))
         ModernButton(
-            btn_row,
+            action_row,
             text="SAVE CHANGES",
             bg=COLORS["SYS"],
             fg="black",
@@ -3512,13 +4896,13 @@ class ArcadeGUI_V2:
             command=self.gm_save_changes,
         ).pack(side="left", padx=(0, 6))
         ModernButton(
-            btn_row,
-            text="DELETE OVERRIDE",
+            action_row,
+            text="DELETE GAME",
             bg=COLORS["DANGER"],
             fg="white",
-            width=14,
+            width=12,
             font=("Segoe UI", 9, "bold"),
-            command=self.gm_delete_override,
+            command=self.gm_delete_game,
         ).pack(side="left")
 
         self.gm_rows, self.game_col_map = self._load_game_catalog()
@@ -3996,6 +5380,27 @@ class ArcadeGUI_V2:
                 frame_override[k] = col
             self.cab.show()
             self._sync_alu_emulator(frame_override)
+        elif self.fx_active == "TEASE_INDEPENDENT":
+            # Copy of TEASE, but each button runs independent pulse sweep timing and hue cycle speed.
+            now = time.time()
+            keys = list(self.cab.LEDS.keys())
+            sweep_period = 16.0
+            for i, k in enumerate(keys):
+                sweep_offset = ((i * 0.41421356237) % 1.0) * sweep_period
+                sweep = ((now + sweep_offset) % sweep_period) / sweep_period
+                sweep_mix = 1.0 - abs((2.0 * sweep) - 1.0)  # triangle wave
+                hz = 0.5 + (1.5 * sweep_mix)  # 0.5 to 2.0 pulses/sec
+                phase_offset = (i * 0.61803398875) % 1.0
+                pulse = 0.5 + (0.5 * math.sin((now * hz * math.tau) + (phase_offset * math.tau)))
+                brightness = 0.08 + (0.92 * pulse)
+                hue_speed = 0.03 * (0.75 + (((i * 0.27182818284) % 1.0) * 0.90))
+                hue = ((now * hue_speed) + ((i * 0.38196601125) % 1.0)) % 1.0
+                r, g, b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+                col = (int(r * 255 * brightness), int(g * 255 * brightness), int(b * 255 * brightness))
+                self.cab.set(k, col)
+                frame_override[k] = col
+            self.cab.show()
+            self._sync_alu_emulator(frame_override)
         self.root.after(delay, self._run_fx_preview)
     def stop_animation(self):
         self.animating = False
@@ -4007,12 +5412,15 @@ class ArcadeGUI_V2:
         q = self.gm_search.get().strip().lower()
         self.gm_list.delete(0, tk.END)
         title_key = self.gm_title_key
+        titles = []
         for row in self.gm_rows:
             title = row.get(title_key, "") if title_key else ""
             if not title:
                 continue
             if q and q not in title.lower():
                 continue
+            titles.append(title)
+        for title in sorted(titles, key=lambda s: str(s).lower()):
             self.gm_list.insert(tk.END, title)
         if self.gm_list.size() > 0:
             self.gm_list.selection_set(0)
@@ -4024,10 +5432,7 @@ class ArcadeGUI_V2:
         name = simpledialog.askstring("Save Key Mapping", "Keymap name:")
         if not name:
             return
-        controls = {}
-        for k, d in self.led_state.items():
-            rgb = d.get("primary", (0, 0, 0))
-            controls[k] = self._rgb_to_hex(*rgb)
+        controls = self._collect_controls_from_led_state(include_slots=True)
         payload = {
             "name": name,
             "controls": controls,
@@ -4062,10 +5467,13 @@ class ArcadeGUI_V2:
                 break
         if not row:
             return
-        rom_key = self._rom_key_from_title(row.get(title_key, ""))
+        rom_key = self._row_rom_key(row, self.game_col_map, title_key)
+        if not rom_key:
+            rom_key = self._rom_key_from_title(title)
         self.gm_selected_rom = rom_key
         entry = self.game_db.get(rom_key, {})
         profile = entry.get("profile", {})
+        metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
         catalog_override = entry.get("catalog_override", {}) or entry.get("catalog", {})
         catalog_base = entry.get("catalog_base", {})
         override_enabled = entry.get("override_enabled", True)
@@ -4085,6 +5493,11 @@ class ArcadeGUI_V2:
         self.gm_fields["rec_platform"].set(pick("rec_platform", "rec_platform", ""))
         self.gm_fields["rank"].set(pick("rank", "rank", ""))
         self.gm_fields["rom_key"].set(rom_key)
+        self.gm_fields["players"].set(str(metadata.get("players", "")).strip())
+        self.gm_fields["input_buttons"].set(str(metadata.get("input_buttons", "")).strip())
+        self.gm_fields["input_control"].set(str(metadata.get("input_control", "")).strip())
+        self.gm_fields["source"].set(str(metadata.get("source", "")).strip())
+        self.gm_fields["description"].set(str(metadata.get("description", "")).strip())
         self.gm_fields["vendor"].set(entry.get("vendor", ""))
         self.gm_fields["controller_mode"].set(profile.get("controller_mode", "ARCADE_PANEL"))
         self.gm_fields["lighting_policy"].set(profile.get("lighting_policy", "AUTO"))
@@ -4105,16 +5518,9 @@ class ArcadeGUI_V2:
             "FE_START", "FE_QUIT", "SCREENSAVER_START", "SCREENSAVER_STOP", "LIST_CHANGE",
             "GAME_START", "GAME_QUIT", "GAME_PAUSE", "AUDIO_ANIMATION", "SPEAK_CONTROLS", "DEFAULT"
         ]
-        events = []
-        for k, v in event_map.items():
-            if isinstance(v, dict):
-                anim = v.get("animation") or "—"
-                bmap = v.get("button_map") or "—"
-                events.append(f"{k}:{anim} ({bmap})")
-            elif v:
-                events.append(f"{k}:{v}")
+        events = self._format_event_summary_items(event_map)
         if "event_summary" in self.gm_fields:
-            self.gm_fields["event_summary"].set("Configured: " + (", ".join(sorted(events)) if events else "NONE"))
+            self.gm_fields["event_summary"].set("Configured: " + (", ".join(events) if events else "NONE"))
         if "event_details" in self.gm_fields:
             lines = []
             for ev in event_types:
@@ -4138,11 +5544,39 @@ class ArcadeGUI_V2:
             items = ["Current Deck"] + sorted(self.keymap_library.keys())
             self.gm_fields["btn_map_items"] = items
         if "anim_list" in self.gm_fields:
-            items = sorted(getattr(self, "animation_library", {}).keys())
+            items = list(self._gm_assignable_effect_options(entry))
             self.gm_fields["anim_items"] = items
         if "event_list" in self.gm_fields:
             self.gm_fields["event_items"] = list(event_types)
         self._gm_filter_event_lists()
+        # Keep quick-assign controls in sync with available maps/animations.
+        if "quick_anim_combo" in self.gm_fields:
+            quick_anims = self._gm_assignable_effect_options(entry)
+            self.gm_fields["quick_anim_combo"]["values"] = tuple(quick_anims)
+        if "quick_map_combo" in self.gm_fields:
+            quick_maps = ["Current Deck"] + sorted(self.keymap_library.keys())
+            self.gm_fields["quick_map_combo"]["values"] = tuple(quick_maps)
+        if "quick_event" in self.gm_fields:
+            qev = self.gm_fields["quick_event"].get().strip() or "GAME_START"
+            qanim = ""
+            qmap = "Current Deck"
+            cur = event_map.get(qev)
+            if isinstance(cur, dict):
+                qanim = str(cur.get("animation", "")).strip()
+                qmap = str(cur.get("button_map", "Current Deck") or "Current Deck")
+            elif cur:
+                qanim = str(cur).strip()
+            if qanim:
+                self.gm_fields["quick_anim"].set(qanim)
+            if "quick_map_combo" in self.gm_fields:
+                try:
+                    vals = list(self.gm_fields["quick_map_combo"]["values"])
+                except Exception:
+                    vals = ["Current Deck"]
+                self.gm_fields["quick_map"].set(qmap if qmap in vals else "Current Deck")
+        self._gm_draw_map_preview(entry.get("controls", {}) or {})
+        if "preview_status" in self.gm_fields:
+            self.gm_fields["preview_status"].set("Preview: Ready")
         self._alu_preview_from_rom(rom_key)
     def _gm_filter_event_lists(self, _evt=None):
         if not hasattr(self, "gm_fields"):
@@ -4165,7 +5599,7 @@ class ArcadeGUI_V2:
         apply_filter("event_list", "event_items", "event_search")
     def gm_new_game(self):
         self.gm_selected_rom = ""
-        for k in ["title", "developer", "year", "genre", "platform", "rec_platform", "rank", "vendor"]:
+        for k in ["title", "developer", "year", "genre", "platform", "rec_platform", "rank", "vendor", "players", "input_buttons", "input_control", "source", "description"]:
             self.gm_fields[k].set("")
         self.gm_fields["rom_key"].set("")
         self.gm_fields["controller_mode"].set("ARCADE_PANEL")
@@ -4179,7 +5613,245 @@ class ArcadeGUI_V2:
             self.gm_fields["event_details"].configure(state="normal")
             self.gm_fields["event_details"].delete("1.0", tk.END)
             self.gm_fields["event_details"].configure(state="disabled")
+        if "preview_status" in self.gm_fields:
+            self.gm_fields["preview_status"].set("Preview: NONE")
+        if "quick_event" in self.gm_fields:
+            self.gm_fields["quick_event"].set("GAME_START")
+        if "quick_anim" in self.gm_fields:
+            self.gm_fields["quick_anim"].set("")
+        if "quick_map" in self.gm_fields:
+            self.gm_fields["quick_map"].set("Current Deck")
+        self._gm_draw_map_preview({})
         self.override_enabled_var.set(True)
+    def _gm_assignable_effect_options(self, entry=None):
+        values = []
+        seen = set()
+        def add(value):
+            text = str(value or "").strip()
+            if not text:
+                return
+            key = text.upper()
+            if key in seen:
+                return
+            seen.add(key)
+            values.append(text)
+        add("NONE")
+        for label in self._get_shared_effect_options():
+            add(label)
+        if isinstance(getattr(self, "animation_library", None), dict):
+            for name in sorted(self.animation_library.keys(), key=lambda s: str(s).lower()):
+                add(name)
+        if entry is None and getattr(self, "gm_selected_rom", ""):
+            entry = self.game_db.get(self.gm_selected_rom, {})
+        if isinstance(entry, dict):
+            profile = entry.get("profile", {})
+            if isinstance(profile, dict):
+                add(profile.get("default_fx"))
+                add(profile.get("fx_on_start"))
+                add(profile.get("fx_on_end"))
+                p_events = profile.get("events", {})
+                if isinstance(p_events, dict):
+                    for item in p_events.values():
+                        if isinstance(item, dict):
+                            add(item.get("animation"))
+                        else:
+                            add(item)
+            legacy_events = entry.get("events", {})
+            if isinstance(legacy_events, dict):
+                for item in legacy_events.values():
+                    if isinstance(item, dict):
+                        add(item.get("animation"))
+                    else:
+                        add(item)
+        if not values:
+            return ("NONE",)
+        if values[0].upper() != "NONE":
+            values.insert(0, "NONE")
+        head = values[0]
+        tail = sorted(values[1:], key=lambda s: str(s).lower())
+        return tuple([head] + tail)
+    def _gm_build_effective_event_map(self, entry):
+        profile = entry.get("profile", {}) if isinstance(entry, dict) else {}
+        event_map = profile.get("events") or entry.get("events") or {}
+        if not isinstance(event_map, dict):
+            event_map = {}
+        if profile.get("fx_on_start"):
+            event_map.setdefault("GAME_START", {"animation": profile.get("fx_on_start"), "button_map": "Current Deck"})
+        if profile.get("fx_on_end"):
+            event_map.setdefault("GAME_QUIT", {"animation": profile.get("fx_on_end"), "button_map": "Current Deck"})
+        if profile.get("default_fx"):
+            event_map.setdefault("DEFAULT", {"animation": profile.get("default_fx"), "button_map": "Current Deck"})
+        return event_map
+    def _gm_controls_from_button_map(self, button_map):
+        map_name = str(button_map or "Current Deck").strip() or "Current Deck"
+        if map_name != "Current Deck":
+            km = self.keymap_library.get(map_name, {}) if isinstance(getattr(self, "keymap_library", {}), dict) else {}
+            controls = km.get("controls", {}) if isinstance(km, dict) else {}
+            if isinstance(controls, dict) and controls:
+                return controls
+        entry = self.game_db.get(self.gm_selected_rom, {}) if self.gm_selected_rom else {}
+        controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+        return controls if isinstance(controls, dict) else {}
+    def _gm_draw_map_preview(self, controls):
+        if not hasattr(self, "gm_preview_canvas"):
+            return
+        self.gm_preview_controls = controls if isinstance(controls, dict) else {}
+        c = self.gm_preview_canvas
+        c.delete("all")
+        w = max(720, int(c.winfo_width() or 720))
+        h = max(170, int(c.winfo_height() or 170))
+        c.config(width=w, height=h)
+        def color_for(key):
+            val = self.gm_preview_controls.get(key)
+            hx = self._alu_parse_color(val) if val is not None else None
+            return hx or "#1b1b1b"
+        def draw_btn(x, y, r, key, label):
+            fill = color_for(key)
+            c.create_oval(x-r, y-r, x+r, y+r, fill=fill, outline="#4a4a4a", width=1)
+            c.create_text(x, y+r+10, text=label, fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
+        c.create_text(int(w*0.16), 16, text="PLAYER 1", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        c.create_text(int(w*0.50), 16, text="ADMIN", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        c.create_text(int(w*0.84), 16, text="PLAYER 2", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        p1x = int(w*0.16); p2x = int(w*0.84); ay = 56; by = 96; step = 44; r = 16
+        draw_btn(p1x-step, ay, r, "P1_A", "A"); draw_btn(p1x, ay, r, "P1_B", "B"); draw_btn(p1x+step, ay, r, "P1_C", "C")
+        draw_btn(p1x-step, by, r, "P1_X", "X"); draw_btn(p1x, by, r, "P1_Y", "Y"); draw_btn(p1x+step, by, r, "P1_Z", "Z")
+        draw_btn(p2x-step, ay, r, "P2_A", "A"); draw_btn(p2x, ay, r, "P2_B", "B"); draw_btn(p2x+step, ay, r, "P2_C", "C")
+        draw_btn(p2x-step, by, r, "P2_X", "X"); draw_btn(p2x, by, r, "P2_Y", "Y"); draw_btn(p2x+step, by, r, "P2_Z", "Z")
+        ax = int(w*0.50)
+        draw_btn(ax-70, ay, r, "P1_START", "P1")
+        draw_btn(ax-22, ay, r, "P2_START", "P2")
+        draw_btn(ax+26, ay, r, "REWIND", "RWD")
+        draw_btn(ax+74, ay, r, "MENU", "MENU")
+        tr = 26
+        tfill = color_for("TRACKBALL")
+        c.create_oval(ax-tr, 126-tr, ax+tr, 126+tr, fill=tfill, outline="#4a4a4a", width=1)
+        c.create_text(ax, 126, text="TB", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
+    def _gm_preview_assignment(self):
+        if not self.gm_selected_rom:
+            messagebox.showinfo("Preview", "Select a game first.")
+            return
+        ev_sel = self.gm_fields["event_list"].curselection() if "event_list" in self.gm_fields else ()
+        anim_sel = self.gm_fields["anim_list"].curselection() if "anim_list" in self.gm_fields else ()
+        map_sel = self.gm_fields["btn_map_list"].curselection() if "btn_map_list" in self.gm_fields else ()
+        event = self.gm_fields["event_list"].get(ev_sel[0]) if ev_sel else "GAME_START"
+        animation = self.gm_fields["anim_list"].get(anim_sel[0]) if anim_sel else ""
+        button_map = self.gm_fields["btn_map_list"].get(map_sel[0]) if map_sel else "Current Deck"
+        entry = self.game_db.get(self.gm_selected_rom, {})
+        if not animation:
+            event_map = self._gm_build_effective_event_map(entry)
+            cur = event_map.get(event)
+            if isinstance(cur, dict):
+                animation = str(cur.get("animation", "")).strip()
+                if button_map == "Current Deck":
+                    button_map = str(cur.get("button_map", "Current Deck") or "Current Deck")
+            elif cur:
+                animation = str(cur).strip()
+        self._gm_preview_event_values(event, animation, button_map)
+    def _gm_preview_quick_event(self):
+        if not self.gm_selected_rom:
+            messagebox.showinfo("Preview", "Select a game first.")
+            return
+        event = str(self.gm_fields.get("quick_event").get() if "quick_event" in self.gm_fields else "GAME_START").strip() or "GAME_START"
+        animation = str(self.gm_fields.get("quick_anim").get() if "quick_anim" in self.gm_fields else "").strip()
+        button_map = str(self.gm_fields.get("quick_map").get() if "quick_map" in self.gm_fields else "Current Deck").strip() or "Current Deck"
+        if not animation:
+            entry = self.game_db.get(self.gm_selected_rom, {})
+            event_map = self._gm_build_effective_event_map(entry)
+            cur = event_map.get(event)
+            if isinstance(cur, dict):
+                animation = str(cur.get("animation", "")).strip()
+                if button_map == "Current Deck":
+                    button_map = str(cur.get("button_map", "Current Deck") or "Current Deck")
+            elif cur:
+                animation = str(cur).strip()
+        self._gm_preview_event_values(event, animation, button_map)
+    def _gm_preview_event_values(self, event, animation, button_map):
+        controls = self._gm_controls_from_button_map(button_map)
+        self._gm_draw_map_preview(controls)
+        self._load_controls_into_commander_preview(controls, apply_hardware=False)
+        self._sync_alu_emulator()
+        status = f"Preview: {event} -> {animation or 'NONE'} ({button_map})"
+        if animation and animation.upper() != "NONE":
+            if self.is_connected():
+                played_sequence = False
+                anim_entry = self.animation_library.get(animation, {}) if isinstance(getattr(self, "animation_library", {}), dict) else {}
+                if isinstance(anim_entry, dict):
+                    event_block = anim_entry.get("events", {})
+                    if isinstance(event_block, dict):
+                        sequence_keys = [str(event or "").strip().upper()]
+                        if sequence_keys[0] == "GAME_START":
+                            sequence_keys.append("START")
+                        elif sequence_keys[0] == "GAME_QUIT":
+                            sequence_keys.append("END")
+                        for key in sequence_keys:
+                            seq = event_block.get(key, [])
+                            if isinstance(seq, list) and seq:
+                                self._alu_start_animation_sequence(seq)
+                                status += f" | Sequence started ({len(seq)} steps)."
+                                played_sequence = True
+                                break
+                if not played_sequence:
+                    self.preview_animation(animation)
+                    status += " | Effect started."
+            else:
+                status += " | Not connected: map preview only."
+        if "preview_status" in self.gm_fields:
+            self.gm_fields["preview_status"].set(status)
+    def _gm_assign_quick_event(self):
+        if not self.gm_selected_rom:
+            messagebox.showinfo("Assign", "Select a game first.")
+            return
+        event = str(self.gm_fields.get("quick_event").get() if "quick_event" in self.gm_fields else "GAME_START").strip() or "GAME_START"
+        anim = str(self.gm_fields.get("quick_anim").get() if "quick_anim" in self.gm_fields else "").strip()
+        bmap = str(self.gm_fields.get("quick_map").get() if "quick_map" in self.gm_fields else "Current Deck").strip() or "Current Deck"
+        if not anim:
+            messagebox.showinfo("Assign", "Select an Effect/Animation (or NONE to clear).")
+            return
+        self._gm_assign_event_values(event, anim, bmap)
+    def _gm_assign_event_values(self, event, anim, bmap):
+        event = str(event or "").strip()
+        anim = str(anim or "").strip()
+        bmap = str(bmap or "Current Deck").strip() or "Current Deck"
+        if not event:
+            messagebox.showinfo("Assign", "Select an Event.")
+            return
+        entry = self.game_db.get(self.gm_selected_rom, {})
+        profile = entry.setdefault("profile", {})
+        events = profile.get("events", {})
+        if not isinstance(events, dict):
+            events = {}
+        clearing = (not anim) or (anim.upper() == "NONE")
+        if clearing:
+            events.pop(event, None)
+        else:
+            events[event] = {"animation": anim, "button_map": bmap}
+        if events:
+            profile["events"] = events
+        elif "events" in profile:
+            profile.pop("events", None)
+        # Keep legacy fields synchronized for start/end/default paths.
+        if event == "GAME_START":
+            profile["fx_on_start"] = "" if clearing else anim
+        elif event == "GAME_QUIT":
+            profile["fx_on_end"] = "" if clearing else anim
+        elif event == "DEFAULT":
+            profile["default_fx"] = "" if clearing else anim
+        entry["profile"] = profile
+        self.game_db[self.gm_selected_rom] = entry
+        self._save_game_db()
+        # Update legacy fields for compatibility.
+        if event == "GAME_START":
+            self.gm_fields["fx_on_start"].set("NONE" if clearing else anim)
+        elif event == "GAME_QUIT":
+            self.gm_fields["fx_on_end"].set("NONE" if clearing else anim)
+        elif event == "DEFAULT":
+            self.gm_fields["default_fx"].set("NONE" if clearing else anim)
+        self._on_gm_select()
+        if "preview_status" in self.gm_fields:
+            if clearing:
+                self.gm_fields["preview_status"].set(f"Cleared: {event}")
+            else:
+                self.gm_fields["preview_status"].set(f"Assigned: {event} -> {anim} ({bmap})")
     def _gm_assign_event(self):
         if not self.gm_selected_rom:
             messagebox.showinfo("Assign", "Select a game first.")
@@ -4189,27 +5861,13 @@ class ArcadeGUI_V2:
         ev_sel = self.gm_fields["event_list"].curselection()
         anim_sel = self.gm_fields["anim_list"].curselection()
         map_sel = self.gm_fields["btn_map_list"].curselection()
-        if not ev_sel or not anim_sel or not map_sel:
-            messagebox.showinfo("Assign", "Select Button Map, Animation, and Event.")
+        if not ev_sel or not anim_sel:
+            messagebox.showinfo("Assign", "Select an Event and Effect/Animation.")
             return
         event = self.gm_fields["event_list"].get(ev_sel[0])
         anim = self.gm_fields["anim_list"].get(anim_sel[0])
-        bmap = self.gm_fields["btn_map_list"].get(map_sel[0])
-        entry = self.game_db.get(self.gm_selected_rom, {})
-        profile = entry.setdefault("profile", {})
-        events = profile.setdefault("events", {})
-        events[event] = {"animation": anim, "button_map": bmap}
-        entry["profile"] = profile
-        self.game_db[self.gm_selected_rom] = entry
-        self._save_game_db()
-        # Update legacy fields for compatibility
-        if event == "GAME_START":
-            self.gm_fields["fx_on_start"].set(anim)
-        elif event == "GAME_QUIT":
-            self.gm_fields["fx_on_end"].set(anim)
-        elif event == "DEFAULT":
-            self.gm_fields["default_fx"].set(anim)
-        self._on_gm_select()
+        bmap = self.gm_fields["btn_map_list"].get(map_sel[0]) if map_sel else "Current Deck"
+        self._gm_assign_event_values(event, anim, bmap)
     def gm_reload_db(self):
         self.game_db = self._load_game_db()
         self._refresh_gm_list()
@@ -4234,7 +5892,7 @@ class ArcadeGUI_V2:
         if not row:
             messagebox.showinfo("Export Game", "Catalog entry not found.")
             return
-        rom_key = self._rom_key_from_title(row.get(title_key, ""))
+        rom_key = self._row_rom_key(row, self.game_col_map, title_key)
         entry = self.game_db.get(rom_key, {})
         fx_effect = None
         fx_id = entry.get("fx_id")
@@ -4387,7 +6045,8 @@ class ArcadeGUI_V2:
                 if fx:
                     self.preview_animation(fx)
         self._refresh_fx_list()
-        messagebox.showinfo("Loaded", "Database reloaded from disk.")
+        if hasattr(self, "status_var"):
+            self.status_var.set(f"Loaded profile: {rom_key}")
     def gm_save_changes(self):
         title = self.gm_fields["title"].get().strip()
         rom_key = self.gm_fields["rom_key"].get().strip() or self._rom_key_from_title(title)
@@ -4405,6 +6064,15 @@ class ArcadeGUI_V2:
         entry["profile"]["default_fx"] = "" if self.gm_fields["default_fx"].get() == "NONE" else self.gm_fields["default_fx"].get()
         entry["profile"]["fx_on_start"] = "" if self.gm_fields["fx_on_start"].get() == "NONE" else self.gm_fields["fx_on_start"].get()
         entry["profile"]["fx_on_end"] = "" if self.gm_fields["fx_on_end"].get() == "NONE" else self.gm_fields["fx_on_end"].get()
+        metadata = entry.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata["players"] = self.gm_fields["players"].get().strip()
+        metadata["input_buttons"] = self.gm_fields["input_buttons"].get().strip()
+        metadata["input_control"] = self.gm_fields["input_control"].get().strip()
+        metadata["source"] = self.gm_fields["source"].get().strip()
+        metadata["description"] = self.gm_fields["description"].get().strip()
+        entry["metadata"] = metadata
         entry["override_enabled"] = bool(self.override_enabled_var.get())
         entry["catalog_override"] = {
             "title": self.gm_fields["title"].get().strip(),
@@ -4444,32 +6112,79 @@ class ArcadeGUI_V2:
         self.gm_fields["rom_key"].set(rom_key)
         self._refresh_game_list()
         self._refresh_gm_list()
+        # Keep the saved ROM selected in Game Manager so changes remain visible.
+        row = self._find_catalog_row_by_rom(rom_key)
+        title_key = self.gm_title_key
+        saved_title = row.get(title_key, "") if isinstance(row, dict) and title_key else ""
+        if saved_title and hasattr(self, "gm_list"):
+            for i in range(self.gm_list.size()):
+                if str(self.gm_list.get(i)).strip() == str(saved_title).strip():
+                    self.gm_list.selection_clear(0, tk.END)
+                    self.gm_list.selection_set(i)
+                    self.gm_list.activate(i)
+                    self.gm_list.see(i)
+                    self._on_gm_select()
+                    break
         self._refresh_fx_list()
         messagebox.showinfo("Saved", f"Game '{rom_key}' saved.")
-    def gm_delete_override(self):
-        rom_key = self.gm_fields["rom_key"].get().strip()
-        if not rom_key or rom_key not in self.game_db:
-            messagebox.showinfo("No Override", "No override exists for this game.")
+    def gm_delete_game(self):
+        if not hasattr(self, "gm_fields"):
             return
-        if messagebox.askyesno("Delete Override", f"Delete override for '{rom_key}'?"):
-            del self.game_db[rom_key]
-            self._save_game_db()
-            self._refresh_game_list()
-            self._refresh_fx_list()
-            messagebox.showinfo("Deleted", "Override removed.")
+        rom_key = self.gm_fields["rom_key"].get().strip()
+        title = self.gm_fields["title"].get().strip() or rom_key
+        if not rom_key:
+            messagebox.showinfo("Delete Game", "Select a game first.")
+            return
+        if rom_key not in self.game_db:
+            messagebox.showinfo("Delete Game", f"'{title}' was not found in the JSON database.")
+            return
+        if not messagebox.askyesno(
+            "Delete Game",
+            f"Delete '{title}' ({rom_key}) from the game database?\n\nThis cannot be undone.",
+        ):
+            return
+        del self.game_db[rom_key]
+        self._save_game_db()
+        # Rebuild shared list caches so deletion is reflected on all tabs.
+        self.game_rows, self.game_col_map = self._load_game_catalog()
+        self.game_title_key = self.game_col_map.get("title")
+        self.gm_rows = list(self.game_rows)
+        self.gm_title_key = self.game_title_key
+        self._refresh_game_list()
+        self._refresh_gm_list()
+        self._refresh_fx_list()
+        if hasattr(self, "_alu_refresh_list"):
+            self._alu_refresh_list()
+        self.gm_new_game()
+        messagebox.showinfo("Deleted", f"Game '{title}' removed.")
+    def gm_delete_override(self):
+        # Legacy alias: catalog/override data is now unified in one JSON DB.
+        self.gm_delete_game()
     def _refresh_fx_list(self, _evt=None):
         if not hasattr(self, "fx_list"):
             return
         q = self.fx_search.get().strip().lower()
         self.fx_list.delete(0, tk.END)
         title_key = self.game_title_key
+        self.fx_title_to_rom = {}
+        titles = []
         for row in self.game_rows:
             title = row.get(title_key, "") if title_key else ""
             if not title:
                 continue
             if q and q not in title.lower():
                 continue
-            self.fx_list.insert(tk.END, title)
+            rom_key = self._row_rom_key(row, self.game_col_map, title_key)
+            if not rom_key:
+                continue
+            label = title
+            # Keep labels unique so selection resolves deterministically.
+            if label in self.fx_title_to_rom and self.fx_title_to_rom[label] != rom_key:
+                label = f"{title} [{rom_key}]"
+            self.fx_title_to_rom[label] = rom_key
+            titles.append(label)
+        for label in sorted(titles, key=lambda s: str(s).lower()):
+            self.fx_list.insert(tk.END, label)
         if self.fx_list.size() > 0:
             self.fx_list.selection_set(0)
             self._on_fx_select()
@@ -4480,10 +6195,15 @@ class ArcadeGUI_V2:
         if not sel:
             return
         title = self.fx_list.get(sel[0])
-        title_key = self.game_title_key
-        rom_key = self._rom_key_from_title(title)
+        rom_key = ""
+        if isinstance(getattr(self, "fx_title_to_rom", None), dict):
+            rom_key = self.fx_title_to_rom.get(title, "")
+        if not rom_key:
+            rom_key = self._rom_key_from_title(title)
         self.fx_selected_rom = rom_key
         entry = self.game_db.get(rom_key, {})
+        self._load_controls_into_commander_preview(entry.get("controls", {}) or {}, apply_hardware=False)
+        self._alu_preview_from_rom(rom_key)
         profile = entry.get("profile", {})
         self.fx_on_start_var.set(profile.get("fx_on_start", "") or "NONE")
         self.fx_on_end_var.set(profile.get("fx_on_end", "") or "NONE")
@@ -4821,10 +6541,13 @@ class ArcadeGUI_V2:
         body.pack(fill="both", expand=True, padx=20, pady=10)
         body.columnconfigure(0, weight=2)
         body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
 
         form = tk.LabelFrame(body, text=" CONFIGURATION ", bg=COLORS["CHARCOAL"], fg=COLORS["P1"],
                              font=("Segoe UI", 9, "bold"), padx=12, pady=10)
-        form.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        form.grid(row=0, column=0, rowspan=3, sticky="nsew", padx=(0, 10))
 
         summary = tk.LabelFrame(body, text=" SUMMARY ", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"],
                                 font=("Segoe UI", 9, "bold"), padx=12, pady=10)
@@ -4836,7 +6559,7 @@ class ArcadeGUI_V2:
 
         future_cfg = tk.LabelFrame(body, text=" FUTURE ENHANCEMENTS ", bg=COLORS["CHARCOAL"], fg=COLORS["P1"],
                                    font=("Segoe UI", 9, "bold"), padx=12, pady=10)
-        future_cfg.grid(row=1, column=0, sticky="nsew", padx=(0, 10), pady=(10, 0))
+        future_cfg.grid(row=2, column=1, sticky="nsew", pady=(10, 0))
 
         cfg = self.controller_config or {}
         self.controller_vars = {
@@ -4959,6 +6682,23 @@ class ArcadeGUI_V2:
         ).pack(anchor="w", fill="x", pady=(6, 0))
         _refresh_preset_description()
 
+        future_wrap = tk.Frame(future_cfg, bg=COLORS["CHARCOAL"])
+        future_wrap.pack(fill="both", expand=True)
+        future_list = tk.Listbox(
+            future_wrap,
+            bg=COLORS["CHARCOAL"],
+            fg="white",
+            borderwidth=0,
+            highlightthickness=0,
+            activestyle="none",
+            height=6,
+            font=("Segoe UI", 9),
+        )
+        future_list.pack(side="left", fill="both", expand=True)
+        future_scroll = tk.Scrollbar(future_wrap, orient="vertical", command=future_list.yview)
+        self._style_scrollbar(future_scroll)
+        future_scroll.pack(side="right", fill="y")
+        future_list.configure(yscrollcommand=future_scroll.set)
         for line in (
             "\u2022 IPAC2 Controller Support",
             "\u2022 4 Player Control Decks",
@@ -4976,15 +6716,7 @@ class ArcadeGUI_V2:
             "\u2022 Accessibility Options",
             "\u2022 Safe Mode Fallback",
         ):
-            tk.Label(
-                future_cfg,
-                text=line,
-                bg=COLORS["CHARCOAL"],
-                fg="white",
-                anchor="w",
-                justify="left",
-                font=("Segoe UI", 9),
-            ).pack(fill="x", pady=1)
+            future_list.insert("end", line)
 
         def add_row(label, widget, row):
             tk.Label(form, text=label, bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
@@ -5871,7 +7603,7 @@ class ArcadeGUI_V2:
                 return
             key = catalog_list.get(sel[0])
             aliases = list_aliases(key) if ANIM_REGISTRY_AVAILABLE else []
-            alias_txt = ", ".join(aliases) if aliases else "—"
+            alias_txt = ", ".join(aliases) if aliases else "â€”"
             catalog_info.config(text=f"Aliases: {alias_txt}")
 
         def _anim_lib_select(_evt=None):
@@ -7267,6 +8999,8 @@ class ArcadeGUI_V2:
             "classic_static": {"rate": 0.2, "intensity": 0.6, "stagger": 0.0, "curve": "Linear", "wave_type": "Sine"},
             "neon_minimal": {"rate": 0.9, "intensity": 0.9, "stagger": 0.04, "curve": "Ease-In", "wave_type": "Sine"},
             "party_mode": {"rate": 1.6, "intensity": 1.0, "stagger": 0.10, "curve": "Linear", "wave_type": "Triangle"},
+            "tease": {"rate": 1.0, "intensity": 1.0, "stagger": 0.10, "curve": "Linear", "wave_type": "Sine"},
+            "tease_independent": {"rate": 1.1, "intensity": 1.0, "stagger": 0.14, "curve": "Linear", "wave_type": "Sine"},
         }
         cfg = presets.get(str(preset_id), base)
         return {
@@ -8009,7 +9743,137 @@ class ArcadeGUI_V2:
         fx = entry.get("profile", {}).get("fx_on_end", "")
         if fx:
             self.preview_animation(fx)
+    def _notebook_tab_text_at_xy(self, x, y):
+        if not hasattr(self, "notebook"):
+            return ""
+        try:
+            idx = self.notebook.index(f"@{int(x)},{int(y)}")
+            return str(self.notebook.tab(idx, "text") or "")
+        except Exception:
+            pass
+        try:
+            end = int(self.notebook.index("end"))
+        except Exception:
+            return ""
+        for idx in range(end):
+            try:
+                bx, by, bw, bh = self.notebook.bbox(idx)
+            except Exception:
+                continue
+            if bw <= 0 or bh <= 0:
+                continue
+            if bx <= x < (bx + bw) and by <= y < (by + bh):
+                try:
+                    return str(self.notebook.tab(idx, "text") or "")
+                except Exception:
+                    return ""
+        return ""
+    def _show_tab_help_tooltip_at(self, x_root, y_root, tab_text):
+        if not tab_text:
+            self._hide_tab_help_tooltip()
+            return
+        short = (self.tab_help_map.get(tab_text, {}) or {}).get("short", "").strip()
+        if not short:
+            self._hide_tab_help_tooltip()
+            return
+        if self._tab_help_tip and self._tab_help_tip.winfo_exists() and self._tab_help_tip_tab == tab_text:
+            try:
+                self._tab_help_tip.geometry(f"+{int(x_root) + 12}+{int(y_root) + 14}")
+            except Exception:
+                pass
+            return
+        self._hide_tab_help_tooltip()
+        tip = tk.Toplevel(self.root)
+        tip.overrideredirect(True)
+        tip.attributes("-topmost", True)
+        tip.configure(bg=COLORS["SURFACE_LIGHT"])
+        lbl = tk.Label(
+            tip,
+            text=short,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg=COLORS["TEXT"],
+            font=("Segoe UI", 8),
+            justify="left",
+            anchor="w",
+            padx=8,
+            pady=5,
+        )
+        lbl.pack()
+        try:
+            tip.geometry(f"+{int(x_root) + 12}+{int(y_root) + 14}")
+        except Exception:
+            pass
+        self._tab_help_tip = tip
+        self._tab_help_tip_label = lbl
+        self._tab_help_tip_tab = tab_text
+    def _show_tab_help_tooltip(self, event, tab_text):
+        self._show_tab_help_tooltip_at(getattr(event, "x_root", 0), getattr(event, "y_root", 0), tab_text)
+    def _hide_tab_help_tooltip(self):
+        try:
+            if self._tab_help_tip and self._tab_help_tip.winfo_exists():
+                self._tab_help_tip.destroy()
+        except Exception:
+            pass
+        self._tab_help_tip = None
+        self._tab_help_tip_label = None
+        self._tab_help_tip_tab = ""
+    def _cancel_tab_help_hover_poll(self):
+        try:
+            if self._tab_help_hover_poll_id and hasattr(self, "root"):
+                self.root.after_cancel(self._tab_help_hover_poll_id)
+        except Exception:
+            pass
+        self._tab_help_hover_poll_id = None
+    def _poll_notebook_tab_hover(self):
+        self._tab_help_hover_poll_id = None
+        if not hasattr(self, "notebook") or not self.notebook.winfo_exists():
+            self._hide_tab_help_tooltip()
+            return
+        try:
+            px = self.notebook.winfo_pointerx()
+            py = self.notebook.winfo_pointery()
+            x = px - self.notebook.winfo_rootx()
+            y = py - self.notebook.winfo_rooty()
+            tab_text = self._notebook_tab_text_at_xy(x, y)
+            if tab_text:
+                self._show_tab_help_tooltip_at(px, py, tab_text)
+            else:
+                self._hide_tab_help_tooltip()
+        except Exception:
+            self._hide_tab_help_tooltip()
+            return
+        try:
+            self._tab_help_hover_poll_id = self.root.after(160, self._poll_notebook_tab_hover)
+        except Exception:
+            self._tab_help_hover_poll_id = None
+    def _on_notebook_tab_enter(self, _event=None):
+        self._cancel_tab_help_hover_poll()
+        try:
+            self._tab_help_hover_poll_id = self.root.after(40, self._poll_notebook_tab_hover)
+        except Exception:
+            self._tab_help_hover_poll_id = None
+    def _on_notebook_tab_hover(self, event):
+        tab_text = self._notebook_tab_text_at_xy(event.x, event.y)
+        if tab_text:
+            self._show_tab_help_tooltip(event, tab_text)
+        else:
+            self._hide_tab_help_tooltip()
+    def _on_notebook_tab_leave(self, _event=None):
+        self._cancel_tab_help_hover_poll()
+        self._hide_tab_help_tooltip()
+    def _on_notebook_tab_right_click(self, event):
+        tab_text = self._notebook_tab_text_at_xy(event.x, event.y)
+        if not tab_text:
+            return
+        self._hide_tab_help_tooltip()
+        full = (self.tab_help_map.get(tab_text, {}) or {}).get("full", "").strip()
+        if not full:
+            return
+        messagebox.showinfo(f"{tab_text} Summary", full)
+        return "break"
     def _update_notebook_theme(self, _evt=None):
+        self._cancel_tab_help_hover_poll()
+        self._hide_tab_help_tooltip()
         current = self.notebook.select()
         tab_text = self.notebook.tab(current, "text") if current else ""
         show_banner = bool(current and hasattr(self, "tab_main") and current == str(self.tab_main))
@@ -8123,7 +9987,10 @@ class ArcadeGUI_V2:
                 if upd:
                     self._sync_alu_emulator()
                 else:
-                    self._tick_effects_engine()
+                    if getattr(self, "alu_static_preview_lock", False):
+                        self._sync_alu_emulator()
+                    else:
+                        self._tick_effects_engine()
             if not self.force_exit: self.root.after(30, loop)
         loop()
 
@@ -8134,14 +10001,45 @@ class ArcadeGUI_V2:
 
     def apply_settings_to_hardware(self):
         self.animating = False; self.attract_active = False
-        if not self.is_connected(): return
-        self.cab.set_all((0,0,0)) 
-        for n, d in self.led_state.items():
-            if hasattr(self, "cab") and hasattr(self.cab, "LEDS"):
-                if n not in self.cab.LEDS:
-                    continue
-            self.cab.set(n, d['primary'])
-        self.cab.show()
+        if not self.is_connected():
+            try:
+                if not (hasattr(self, "cab") and hasattr(self.cab, "reconnect")):
+                    return
+                try:
+                    ok = bool(self.cab.reconnect(getattr(self, "port", None), timeout=0.35))
+                except TypeError:
+                    ok = bool(self.cab.reconnect(getattr(self, "port", None)))
+                if not ok:
+                    return
+            except Exception:
+                return
+        hw_ready = self._ensure_hw_ready()
+        if not hw_ready and hasattr(self, "status_var"):
+            self.status_var.set("Control Deck hardware offline; update sent to ACLighter and will apply after reconnect.")
+        try:
+            self.cab.set_all((0,0,0))
+            for n, d in self.led_state.items():
+                if hasattr(self, "cab") and hasattr(self.cab, "LEDS"):
+                    if n not in self.cab.LEDS:
+                        continue
+                self.cab.set(n, d['primary'])
+            self.cab.show()
+        except Exception:
+            # Last-chance reconnect + retry if transport dropped between set/show.
+            try:
+                if hasattr(self, "cab") and hasattr(self.cab, "reconnect"):
+                    try:
+                        self.cab.reconnect(getattr(self, "port", None), timeout=0.35)
+                    except TypeError:
+                        self.cab.reconnect(getattr(self, "port", None))
+                    self.cab.set_all((0,0,0))
+                    for n, d in self.led_state.items():
+                        if hasattr(self, "cab") and hasattr(self.cab, "LEDS") and n not in self.cab.LEDS:
+                            continue
+                        self.cab.set(n, d['primary'])
+                    self.cab.show()
+            except Exception:
+                pass
         self._sync_alu_emulator()
 
     def all_off(self):
@@ -8408,7 +10306,7 @@ class ArcadeGUI_V2:
         info = self._get_app_info()
         acl_status = "Detected" if acl.get("detected") else "Not Detected"
         acl_version = acl.get("version") or "Unknown"
-        acl_path = acl.get("path") or "—"
+        acl_path = acl.get("path") or "â€”"
         text = (
             f"{APP_NAME}\n"
             f"Version: {info['semver']} (ALPHA)\n"
@@ -8514,7 +10412,7 @@ class ArcadeGUI_V2:
         # Required components
         req = tk.LabelFrame(body, text=" REQUIRED COMPONENTS ", bg=COLORS["CHARCOAL"], fg=COLORS["SYS"], font=("Segoe UI", 9, "bold"), padx=10, pady=8)
         req.pack(fill="x", pady=(0, 10))
-        tk.Label(req, text="ACLighter — REQUIRED", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT"], font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
+        tk.Label(req, text="ACLighter â€” REQUIRED", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT"], font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w")
 
         acl_status_var = tk.StringVar(value="Checking...")
         acl_version_var = tk.StringVar(value="Checking...")

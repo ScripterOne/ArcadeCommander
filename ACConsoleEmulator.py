@@ -26,6 +26,7 @@ class VirtualLED:
         self.is_lit = False
         self.catchlight_enabled = True
         self.current_color = None
+        self._near_white = False
         
         self.glow = canvas.create_oval(x-radius-6, y-radius-6, x+radius+6, y+radius+6, fill="", outline="", state="hidden")
         self.bezel = canvas.create_oval(x-radius, y-radius, x+radius, y+radius, outline="#111", width=2)
@@ -52,14 +53,30 @@ class VirtualLED:
         self.current_color = hex_color
         
         if not self.is_lit:
+            self._near_white = False
             self.canvas.itemconfigure(self.glow, state="hidden")
             self.canvas.itemconfigure(self.lens, fill=self.unlit_fill, outline=self.unlit_outline)
             self.canvas.itemconfigure(self.reflection, state="hidden")
             if self.text_id and self.label_type == "INSIDE":
                 self.canvas.itemconfigure(self.text_id, fill="#555")
         else:
-            self.canvas.itemconfigure(self.glow, state="normal", fill=hex_color, stipple="gray50")
-            self.canvas.itemconfigure(self.lens, fill=hex_color, outline=hex_color)
+            r = g = b = 0
+            try:
+                h = str(hex_color).lstrip("#")
+                if len(h) == 6:
+                    r = int(h[0:2], 16)
+                    g = int(h[2:4], 16)
+                    b = int(h[4:6], 16)
+            except Exception:
+                pass
+            self._near_white = (r >= 245 and g >= 245 and b >= 245)
+            if self._near_white:
+                # White needs a cleaner lens/overlay treatment so it doesn't read as gray.
+                self.canvas.itemconfigure(self.glow, state="normal", fill="#ffffff", stipple="gray25")
+                self.canvas.itemconfigure(self.lens, fill="#ffffff", outline="#f7f7f7")
+            else:
+                self.canvas.itemconfigure(self.glow, state="normal", fill=hex_color, stipple="gray50")
+                self.canvas.itemconfigure(self.lens, fill=hex_color, outline=hex_color)
             if self.text_id and self.label_type == "INSIDE":
                 self.canvas.itemconfigure(self.text_id, fill="black")
             
@@ -70,7 +87,7 @@ class VirtualLED:
         self.update_reflection_visibility()
 
     def update_reflection_visibility(self):
-        if self.is_lit and self.catchlight_enabled:
+        if self.is_lit and self.catchlight_enabled and not self._near_white:
             self.canvas.itemconfigure(self.reflection, state="normal")
         else:
             self.canvas.itemconfigure(self.reflection, state="hidden")
@@ -364,6 +381,8 @@ class EmulatorApp:
             return None
         if isinstance(val, str):
             raw = val.split("|", 1)[0].strip()
+            if raw.lower() in ("", "-", "none", "off", "null", "n/a"):
+                return None
             if raw.startswith("#") and len(raw) == 7:
                 return raw
             if "," in raw:
@@ -372,7 +391,12 @@ class EmulatorApp:
                     return self._rgb_to_hex((r, g, b))
                 except Exception:
                     return None
-            return None
+            # Support named colors from the DB (e.g. "Red", "Blue", "Cyan").
+            try:
+                r16, g16, b16 = self.root.winfo_rgb(raw)
+                return self._rgb_to_hex((r16 // 256, g16 // 256, b16 // 256))
+            except Exception:
+                return None
         if isinstance(val, (tuple, list)) and len(val) == 3:
             return self._rgb_to_hex(val)
         return None
@@ -657,7 +681,7 @@ class EmulatorApp:
                 data = json.load(f).get(self.current_rom, {}).get("controls", {})
             for bid, val in data.items():
                 if bid in self.leds:
-                    color = val.split('|')[0] if "|" in val else val
+                    color = self._parse_hw_color(val)
                     self.leds[bid].set_color(color)
                     self.profile_colors[bid] = color
                     self._send_hw_color(bid, color)

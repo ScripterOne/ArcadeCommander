@@ -167,6 +167,71 @@ class TeasePulseCycleEffect(Effect):
         return 15
 
 
+class TeaseIndependentColorCycleEffect(Effect):
+    def __init__(
+        self,
+        min_hz: float = 0.5,
+        max_hz: float = 2.0,
+        sweep_period_ms: float = 16000.0,
+        min_brightness: float = 0.08,
+        max_brightness: float = 1.0,
+        hue_speed_hz: float = 0.03,
+        saturation: float = 1.0,
+    ) -> None:
+        self.min_hz = max(0.05, float(min_hz))
+        self.max_hz = max(self.min_hz, float(max_hz))
+        self.sweep_period_ms = max(1000.0, float(sweep_period_ms))
+        self.min_brightness = _clamp01(min_brightness)
+        self.max_brightness = _clamp01(max_brightness)
+        self.hue_speed_hz = max(0.001, float(hue_speed_hz))
+        self.saturation = _clamp01(saturation)
+        self.ctx: EffectContext | None = None
+        self._colors: list[ColorRGB] = []
+        self._pulse_offsets: list[float] = []
+        self._sweep_offsets_ms: list[float] = []
+        self._hue_offsets: list[float] = []
+        self._hue_speeds: list[float] = []
+
+    def initialize(self, context: EffectContext) -> None:
+        self.ctx = context
+        self._colors = [(0, 0, 0)] * context.button_count
+        # Deterministic per-button offsets/speeds so every button feels independently timed.
+        self._pulse_offsets = [((i * 0.61803398875) % 1.0) * math.tau for i in range(context.button_count)]
+        self._sweep_offsets_ms = [((i * 0.41421356237) % 1.0) * self.sweep_period_ms for i in range(context.button_count)]
+        self._hue_offsets = [((i * 0.38196601125) % 1.0) for i in range(context.button_count)]
+        self._hue_speeds = [
+            self.hue_speed_hz * (0.75 + (((i * 0.27182818284) % 1.0) * 0.90))
+            for i in range(context.button_count)
+        ]
+
+    def update(self, delta_time_ms: float, input_state: InputState) -> FrameContribution | None:
+        if not self.ctx:
+            return None
+        if not self._colors:
+            return FrameContribution(colors=self._colors, layer="base")
+
+        now_ms = float(input_state.now_ms)
+        now_s = now_ms / 1000.0
+        span = max(0.0, self.max_brightness - self.min_brightness)
+        hz_span = max(0.0, self.max_hz - self.min_hz)
+
+        for i in range(len(self._colors)):
+            sweep = ((now_ms + self._sweep_offsets_ms[i]) % self.sweep_period_ms) / self.sweep_period_ms
+            # Triangle wave sweep: slow -> fast -> slow, independently phased per button.
+            sweep_mix = 1.0 - abs((2.0 * sweep) - 1.0)
+            current_hz = self.min_hz + (hz_span * sweep_mix)
+            pulse_phase = (now_s * current_hz * math.tau) + self._pulse_offsets[i]
+            pulse = 0.5 + (0.5 * math.sin(pulse_phase))
+            bright = self.min_brightness + (span * pulse)
+            hue = ((now_s * self._hue_speeds[i]) + self._hue_offsets[i]) % 1.0
+            base_color = _hsv_to_rgb(hue, self.saturation, 1.0)
+            self._colors[i] = _scale_color(base_color, bright)
+        return FrameContribution(colors=self._colors, layer="base")
+
+    def priority(self) -> int:
+        return 15
+
+
 class PlayerIdentitySplitEffect(Effect):
     def __init__(self, enabled: bool = False, strength: float = 0.25) -> None:
         self.enabled = enabled

@@ -91346,6 +91346,75 @@
           "trim_end": 100.0
         }
       }
+    },
+    "ea439ad8-cbfd-495d-9af4-30cfaccb26a5": {
+      "fx_id": "ea439ad8-cbfd-495d-9af4-30cfaccb26a5",
+      "name": "EFFECTS: TEASE INDEPENDENT",
+      "entrance": {},
+      "main": {
+        "fx_flags": {
+          "rainbow": false,
+          "breath": false,
+          "strobe": false,
+          "fade": false
+        },
+        "speed": 1.1,
+        "editor_state": {
+          "rate": 1.1,
+          "intensity": 1.0,
+          "stagger": 0.14,
+          "width": 0.5,
+          "bias": 0.0,
+          "width_bias_lock": false,
+          "curve": "Linear",
+          "wave_type": "Sine",
+          "anim_rate": 1.1,
+          "anim_intensity": 1.0,
+          "anim_stagger": 0.14,
+          "anim_width": 0.5,
+          "anim_bias": 0.0,
+          "anim_width_bias_lock": false,
+          "anim_curve": "Linear",
+          "anim_wave_type": "Sine",
+          "selected_buttons": [],
+          "assignments": {},
+          "anim_preview_mode": null,
+          "trim_start": 0.0,
+          "trim_end": 100.0
+        }
+      },
+      "exit": {},
+      "audio_path": "",
+      "applied_to": [],
+      "meta": {
+        "source": "effects_preset",
+        "managed": true,
+        "effects_preset_id": "tease_independent",
+        "description": "Independent per-button pulse and hue cycles with individual timing offsets and sweep phases.",
+        "editor_state": {
+          "rate": 1.1,
+          "intensity": 1.0,
+          "stagger": 0.14,
+          "width": 0.5,
+          "bias": 0.0,
+          "width_bias_lock": false,
+          "curve": "Linear",
+          "wave_type": "Sine",
+          "anim_rate": 1.1,
+          "anim_intensity": 1.0,
+          "anim_stagger": 0.14,
+          "anim_width": 0.5,
+          "anim_bias": 0.0,
+          "anim_width_bias_lock": false,
+          "anim_curve": "Linear",
+          "anim_wave_type": "Sine",
+          "selected_buttons": [],
+          "assignments": {},
+          "anim_preview_mode": null,
+          "trim_start": 0.0,
+          "trim_end": 100.0
+        }
+      }
     }
   }
 }

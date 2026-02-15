@@ -1,0 +1,136 @@
+{\rtf1\ansi\deff0
+{\fonttbl{\f0 Segoe UI;}{\f1 Consolas;}}
+\viewkind4\uc1\pard\sa120\sl276\slmult1\f0\fs34\b Arcade Commander 2.0 User Manual\b0\fs22\par
+\pard\sa120\sl276\slmult1\f0\fs22 Version 2.0 Release Package\par
+\par
+\b 1. Suite Overview\b0\par
+Arcade Commander 2.0 ships as a 3-component Windows suite:\par
+- ArcadeCommanderV2.exe (main UI)\par
+- ACLighter.exe (background lighting service/tray app)\par
+- ACDispatch.exe (dispatcher CLI for event automation)\par
+\par
+[SCREENSHOT PLACEHOLDER 01: Full app window showing all tabs]\par
+\par
+\b 2. Installation and Startup Order\b0\par
+Recommended launch order:\par
+1) Start ACLighter.exe\par
+2) Start ArcadeCommanderV2.exe\par
+3) Use ACDispatch.exe for automation/testing\par
+\par
+Runtime communication endpoint: 127.0.0.1:6006\par
+\par
+[SCREENSHOT PLACEHOLDER 02: ACLighter tray icon/menu]\par
+\par
+\b 3. Runtime Data Locations\b0\par
+All runtime files are stored in the data folder:\par
+- data\\config\\ac_settings.json\par
+- data\\config\\controller_config.json\par
+- data\\config\\last_profile.cfg\par
+- data\\games\\AC_GameData.json\par
+- data\\library\\AC_FXLibrary.json\par
+- data\\library\\AC_AnimationLibrary.json\par
+- data\\profiles\\*.json\par
+- data\\keymaps\\*.json\par
+\par
+[SCREENSHOT PLACEHOLDER 03: Explorer view of data folder tree]\par
+\par
+\b 4. Tab Reference\b0\par
+\b ARCADE COMMANDER\b0\par
+Primary live control workspace. Includes the bottom utility bar controls:\par
+APPLY, ALL OFF, BTN TEST, SWAP FIGHT, SWAP START, LED TEST, CYCLE, DEMO, PORT, ABOUT, HELP, QUIT\par
+\par
+[SCREENSHOT PLACEHOLDER 04: Commander tab with utility bar highlighted]\par
+\par
+\b EMULATOR\b0\par
+Use for visual validation of mappings and active effects/animations before or alongside hardware validation.\par
+\par
+[SCREENSHOT PLACEHOLDER 05: Emulator tab showing loaded effect]\par
+\par
+\b GAME MANAGER\b0\par
+Use to create/edit game entries, assign maps, and attach FX/event behavior.\par
+Main game database file: data\\games\\AC_GameData.json\par
+\par
+[SCREENSHOT PLACEHOLDER 06: Game Manager with selected game + assignments]\par
+\par
+\b FX EDITOR\b0\par
+Use for authoring and previewing effects/animations, then saving to shared libraries.\par
+Important: ALL OFF is available here for immediate blackout/reset.\par
+\par
+[SCREENSHOT PLACEHOLDER 07: FX Editor controls + preview area]\par
+\par
+\b CONTROLLER CONFIG\b0\par
+Set controller hardware profile, app settings, and future enhancements card content.\par
+\par
+[SCREENSHOT PLACEHOLDER 08: Controller Config tab + Future Enhancements card]\par
+\par
+\b 5. Shared Effects and Animation Catalog\b0\par
+Shared library files:\par
+- data\\library\\AC_FXLibrary.json\par
+- data\\library\\AC_AnimationLibrary.json\par
+\par
+Effects engine presets include:\par
+showroom_default, classic_static, neon_minimal, party_mode, tease\par
+\par
+Expected behavior: saved effects/animations are visible across Commander, Emulator, and FX Editor selectors.\par
+\par
+[SCREENSHOT PLACEHOLDER 09: Same effect shown in multiple tab dropdowns]\par
+\par
+\b 6. ACLighter Operations\b0\par
+ACLighter listens on 127.0.0.1:6006 and accepts state/animation commands.\par
+Tray menu options:\par
+- STRESS: Plasma\par
+- STRESS: Hyper Strobe\par
+- Test: Rainbow\par
+- Reset (Off)\par
+- Exit\par
+\par
+[SCREENSHOT PLACEHOLDER 10: ACLighter tray menu commands]\par
+\par
+\b 7. ACDispatch CLI Quick Reference\b0\par
+\f1 ACDispatch.exe\f0  (send idle reset)\par
+\f1 ACDispatch.exe --anim RAINBOW\f0  (trigger animation)\par
+\f1 ACDispatch.exe --event GAME_START <rom_name>\f0  (trigger event mapping)\par
+\f1 ACDispatch.exe <rom_name>\f0  (load game profile behavior)\par
+\par
+Supported event family:\par
+FE_START, FE_QUIT, SCREENSAVER_START, SCREENSAVER_STOP, LIST_CHANGE, GAME_START, GAME_QUIT, GAME_PAUSE, AUDIO_ANIMATION, SPEAK_CONTROLS, DEFAULT\par
+\par
+[SCREENSHOT PLACEHOLDER 11: Terminal with ACDispatch examples]\par
+\par
+\b 8. Troubleshooting\b0\par
+\b No lighting response\b0\par
+- Confirm ACLighter is running\par
+- Confirm port 6006 is available\par
+- Confirm correct PORT selection in Commander\par
+- Use ALL OFF then APPLY to force state refresh\par
+\par
+\b Effect visible in FX Editor but missing elsewhere\b0\par
+- Confirm save to shared library files in data\\library\par
+- Reload selector/app and verify entry format\par
+\par
+\b Preview works but hardware does not\b0\par
+- Confirm ACLighter listener active\par
+- Validate physical hardware path\par
+- Run LED TEST and BTN TEST\par
+\par
+[SCREENSHOT PLACEHOLDER 12: Example troubleshooting panel or warning dialog]\par
+\par
+\b 9. Release Checklist\b0\par
+- ArcadeCommanderV2.exe built\par
+- ACLighter.exe built\par
+- ACDispatch.exe built\par
+- Shared effect lists verified across tabs\par
+- ALL OFF verified in Commander and FX Editor\par
+- Tease preset visible in shared preset-enabled locations\par
+- Game map save/load verified\par
+- ACDispatch event simulation verified\par
+\par
+\b 10. Notes for Documentation Editor\b0\par
+You can replace each [SCREENSHOT PLACEHOLDER ##] line with an inserted image in Word while preserving this structure.\par
+\par
+Source docs in repo:\par
+- README.md\par
+- RELEASE_2.0.md\par
+- README_EFFECTS.md\par
+- docs\\USER_MANUAL_V2.md\par
+}

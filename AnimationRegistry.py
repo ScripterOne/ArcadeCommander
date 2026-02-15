@@ -30,6 +30,11 @@ ANIMATIONS = {
         "scopes": ["commander_preview"],
         "aliases": ["TEASE"],
     },
+    "TEASE_INDEPENDENT": {
+        "label": "Tease Independent",
+        "scopes": ["commander_preview"],
+        "aliases": ["TEASE_INDEPENDENT", "TEASE2", "TEASE_2"],
+    },
     "ALL_OFF": {
         "label": "All Off",
         "scopes": ["commander_preview"],

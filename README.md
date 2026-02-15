@@ -1,181 +1,50 @@
-🎮 Arcade Commander
+# Arcade Commander 2.0
 
-Arcade Commander is a Windows application for controlling addressable RGB LEDs (WS2812B) in arcade cabinets using the Adalight protocol. It is designed specifically for the AtGames Legends Ultimate (ALU) when paired with the PicoCTR USB controller and WS2812B RGB adapter, but is architected for future frontend and driver integration.
+Arcade Commander 2.0 is a Windows LED control suite for arcade cabinets.  
+This release includes three coordinated components:
 
-This project fills a long-standing gap: there is no native Windows Adalight driver or unified LED controller for modern arcade frontends. Arcade Commander provides that missing layer.
+- `ArcadeCommanderV2` (main UI and profile/effect workflow)
+- `ACLighter` (background lighting service/daemon)
+- `ACDispatch` (packet/command dispatcher)
 
-✨ Features
+## Release Components
 
-🎨 Per-button RGB control
+### ArcadeCommanderV2
+- Primary operator UI
+- Shared effect loading across Commander, Emulator, and FX Editor tabs
+- Controller configuration and game/profile mapping workflow
 
-Primary & secondary colors
+### ACLighter
+- Runtime lighting service for applying effects and animations
+- Works with shared effect/animation catalogs
 
-Individual overrides
+### ACDispatch
+- Dispatch bridge for control/state packets
+- Supports local/networked flow used by the V2 stack
 
-Group color assignment (Player-wide)
+## Project Layout
 
-💓 Pulse animation engine
+- `ArcadeCommanderV2.py`
+- `ACLighter.py`
+- `ACDispatch.py`
+- `data/config/`
+- `data/games/`
+- `data/library/`
+- `data/profiles/`
+- `data/keymaps/`
+- `assets/`
+- `RELEASE_2.0.md`
 
-Adjustable speed
+## Windows Build Outputs
 
-Smooth color blending
+Expected release artifacts after PyInstaller build:
 
-Hardware-timed updates
+- `dist/ArcadeCommanderV2/ArcadeCommanderV2.exe`
+- `dist/ACLighter.exe`
+- `dist/ACDispatch.exe`
 
-🧪 Built-in LED Tester
+## Notes
 
-Hardware validation mode
-
-RGB + white cycling
-
-Button-by-button verification
-
-🎮 Input Mapping & Diagnostics
-
-Pygame joystick capture
-
-Visual LED feedback on press
-
-Mapping persistence
-
-🧠 Profile system
-
-Save / load lighting profiles
-
-Auto-load last profile on startup
-
-Safe handling of legacy profiles
-
-🖥️ Modern GUI
-
-Animated title effects
-
-Accent-colored player cards
-
-High-contrast, cabinet-friendly layout
-
-🧩 Hardware Compatibility
-Supported (Primary Target)
-
-AtGames Legends Ultimate (ALU)
-
-PicoCTR USB Controller
-
-Drop-in replacement encoder
-
-Built-in WS2812B RGB controller
-
-WS2812B RGB Adapter – 30 RGB
-
-GRB color order
-
-Supports up to 30 RGB channels
-
-Notes
-
-PicoCTR operates USB-only (no Bluetooth)
-
-LEDs are addressed logically (not GPIO-based)
-
-Trackball LEDs supported (labeled as BALL)
-
-🔌 Communication Details
-
-Protocol: Adalight
-
-Connection: USB Serial (COM port)
-
-Default Baud Rate: 230400
-
-LED Count: 30 (configurable in driver)
-
-All LED logic is centralized to ensure future compatibility with:
-
-Native Windows drivers
-
-Frontend DLLs (LaunchBox, HyperSpin, MAME, etc.)
-
-Third-party LED tools (LEDSpicer-style integration)
-
-🗂️ Project Structure
-Arcade-Commander/
-│
-├── ArcadeCommanderv5.py     # Main application
-├── ArcadeDriver.py          # Hardware abstraction layer
-├── assets/                  # UI graphics & banner art
-├── input_map.json           # Saved controller mappings
-├── last_profile.cfg         # Auto-load pointer
-├── README.md
-└── LICENSE
-
-🚀 Getting Started
-Requirements
-
-Windows 10 / 11
-
-Python 3.10+
-
-PicoCTR connected via USB
-
-Python Dependencies
-pip install pyserial pygame pillow
-
-Run
-python ArcadeCommanderv5.py
-
-
-On first launch:
-
-Select the correct COM port if prompted
-
-Configure button mapping
-
-Save your first lighting profile
-
-🧪 Tester & Diagnostics
-
-Right-click any button → Hardware Test
-
-Test Mode lights LEDs on input press
-
-Cycle / Demo modes validate full LED chain
-
-These tools are designed to verify wiring, order, and color accuracy before frontend integration.
-
-🛣️ Roadmap
-
-Planned (not yet implemented):
-
-Windows DLL / API layer for arcade frontends
-
-LaunchBox / HyperSpin integration
-
-Per-game lighting profiles
-
-Audio-reactive lighting modes
-
-Linux support (experimental)
-
-📜 License
-
-This project is released under the MIT License.
-
-You are free to:
-
-Use
-
-Modify
-
-Distribute
-
-Embed in commercial or non-commercial projects
-
-Attribution is appreciated but not required.
-
-🙌 Credits
-
-PicoCTR hardware by ACustomArcade
-
-Adalight protocol by the open-source community
-
-UI & software by ScripterOne
+- Use `RELEASE_2.0.md` for full release notes and change summary.
+- Use `docs/USER_MANUAL_V2.md` for the comprehensive operator manual.
+- This repository is intended to keep all three components in sync for each tagged release.

@@ -29,19 +29,25 @@ class Arcade:
         self.connected = False
         self.port = "Network" 
         self.LEDS = {v: k for k, v in PIN_MAP.items()} 
+        self._last_probe_ts = 0.0
+        self.last_status = None
         self.reconnect()
 
-    def reconnect(self, port=None):
+    def reconnect(self, port=None, timeout=0.35):
+        was_connected = bool(self.connected)
+        self._last_probe_ts = time.time()
         try:
-            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=0.2):
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=timeout):
                 self.connected = True
-                print("[Adapter] Connected to ACLighter.")
+                if not was_connected:
+                    print("[Adapter] Connected to ACLighter.")
                 return True
         except:
             self.connected = False
             return False
 
     def is_connected(self):
+        # Keep this fast/non-blocking; reconnection is attempted at send sites.
         return self.connected
 
     def set(self, index_or_name, color):
@@ -65,21 +71,74 @@ class Arcade:
             self.pixels[name] = c_str
 
     def show(self):
-        if not self.pixels: return
+        if not self.pixels:
+            return
+        if not self.connected:
+            if not self.reconnect(timeout=0.25):
+                return
         payload = {
             "command": "STATE_UPDATE",
             "mode": "GAME",
             "data": self.pixels.copy()
         }
-        self._send_packet(payload)
+        if not self._send_packet(payload):
+            # One retry path for transient socket/service hiccups.
+            if self.reconnect(timeout=0.35):
+                self._send_packet(payload)
 
     def _send_packet(self, data):
         try:
-            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=0.05) as sock:
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=0.35) as sock:
                 sock.sendall(json.dumps(data).encode('utf-8'))
                 self.connected = True
+                self._last_probe_ts = time.time()
+                return True
         except:
             self.connected = False
+            return False
+
+    def get_status(self, timeout=0.5):
+        was_connected = bool(self.connected)
+        payload = {"command": "PING"}
+        try:
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=timeout) as sock:
+                sock.sendall(json.dumps(payload).encode("utf-8"))
+                sock.shutdown(socket.SHUT_WR)
+                raw = sock.recv(4096).decode("utf-8").strip()
+            if not raw:
+                # Backward-compat: older ACLighter builds may not respond to PING.
+                self.connected = True
+                return None
+            info = json.loads(raw)
+            if isinstance(info, dict):
+                self.connected = True
+                self._last_probe_ts = time.time()
+                self.last_status = info
+                return info
+        except:
+            # Status probing must never flap a previously good connection.
+            self.connected = was_connected
+        return None
+
+    def request_driver_reconnect(self, timeout=2.5):
+        was_connected = bool(self.connected)
+        payload = {"command": "RECONNECT_DRIVER"}
+        try:
+            with socket.create_connection((ACLIGHTER_HOST, ACLIGHTER_PORT), timeout=timeout) as sock:
+                sock.sendall(json.dumps(payload).encode("utf-8"))
+                sock.shutdown(socket.SHUT_WR)
+                raw = sock.recv(4096).decode("utf-8").strip()
+            if raw:
+                info = json.loads(raw)
+                if isinstance(info, dict):
+                    self.connected = True
+                    self._last_probe_ts = time.time()
+                    self.last_status = info
+                    return info
+            self.connected = True
+        except:
+            self.connected = was_connected
+        return None
 
     def close(self):
         pass

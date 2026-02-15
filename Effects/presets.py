@@ -10,6 +10,7 @@ from .default_effects import (
     InsertCoinBlinkEffect,
     PlayerIdentitySplitEffect,
     PressRippleEffect,
+    TeaseIndependentColorCycleEffect,
     TeasePulseCycleEffect,
 )
 from .effects_engine import Effect
@@ -88,6 +89,20 @@ def tease() -> list[Effect]:
     ]
 
 
+def tease_independent() -> list[Effect]:
+    return [
+        TeaseIndependentColorCycleEffect(
+            min_hz=0.5,
+            max_hz=2.0,
+            sweep_period_ms=16000.0,
+            min_brightness=0.08,
+            max_brightness=1.0,
+            hue_speed_hz=0.03,
+            saturation=1.0,
+        ),
+    ]
+
+
 PRESETS: list[EffectPreset] = [
     EffectPreset(
         preset_id="showroom_default",
@@ -118,6 +133,12 @@ PRESETS: list[EffectPreset] = [
         name="Tease",
         description="Staggered per-button pulse color cycle with speed sweep between 2.0 and 0.5 pulses per second.",
         build_effects=tease,
+    ),
+    EffectPreset(
+        preset_id="tease_independent",
+        name="Tease Independent",
+        description="Independent per-button pulse and hue cycles with individual timing offsets and sweep phases.",
+        build_effects=tease_independent,
     ),
 ]
 
