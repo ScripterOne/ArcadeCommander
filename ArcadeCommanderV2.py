@@ -17,6 +17,11 @@ import re
 import traceback
 import wave
 import copy
+import socket
+try:
+    import winreg
+except ImportError:
+    winreg = None
 from app_paths import (
     animation_library_file,
     controller_config_file,
@@ -27,6 +32,8 @@ from app_paths import (
     migrate_legacy_runtime_files,
     profile_file,
     settings_file,
+    workstation_buttonmap_dir,
+    workstation_library_file,
 )
 
 # --- TRAY LIBRARY ---
@@ -152,6 +159,8 @@ APP_SEMVER = "2.0.0-alpha.1"
 APP_CHANNEL = "ALPHA (Pre-Release)"
 APP_BUILD_DATE = "2026-02-13"
 APP_COPYRIGHT = "\u00a9 2026 Mark Abraham"
+ACLIGHTER_STARTUP_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+ACLIGHTER_STARTUP_VALUE = "ArcadeCommanderACLighter"
 
 MIT_LICENSE_FALLBACK = """MIT License
 
@@ -395,6 +404,8 @@ COLORS = {
     "BG": "#121212",
     "SURFACE": "#1E1E1E",
     "SURFACE_LIGHT": "#2C2C2C",
+    "SEARCH_BG": "#3A3A3A",
+    "SEARCH_BORDER": "#5A5A5A",
     "P1": "#00E5FF",
     "P2": "#FF0055",
     "SYS": "#FFD700",
@@ -902,6 +913,7 @@ class ArcadeGUI_V2:
         self.app_settings.setdefault("skip_startup_sound", False)
         self.app_settings.setdefault("fx_editor_video_enabled", True)
         self.app_settings.setdefault("fx_editor_video_audio_enabled", True)
+        self.app_settings.setdefault("auto_launch_aclighter", True)
         self.app_settings.setdefault("effects_enabled", True)
         self.app_settings.setdefault("effects_seed", 1337)
         self.app_settings.setdefault("effects_preset_id", "showroom_default")
@@ -1006,10 +1018,15 @@ class ArcadeGUI_V2:
             self.controller_config_file = controller_config_file()
             self.game_db_path = game_db_file()
             self.default_profile_path = profile_file("default.json")
+            self.workstation_db_path = workstation_library_file()
+            self.workstation_button_map_dir = workstation_buttonmap_dir()
             settings = self.load_settings() or {}
             if isinstance(settings, dict):
                 self.app_settings.update(settings)
             self.port = self.app_settings.get("port", None)
+
+            if bool(self.app_settings.get("auto_launch_aclighter", True)):
+                self._ensure_aclighter_running_on_startup()
             
             # --- V2 CONNECTION LOGIC ---
             # We default to the ServiceAdapter, which auto-connects to localhost
@@ -1095,7 +1112,9 @@ class ArcadeGUI_V2:
             self.animation_library_path = animation_library_file()
             self.animation_library = self._load_animation_library()
             self.keymap_dir = keymap_dir()
+            self.workstation_library = self._load_workstation_library()
             self.keymap_library = self._load_keymap_library()
+            self._sync_workstation_library()
             self.fx_video_playing = False
             self.fx_video_played = False
             self.fx_video_cap = None
@@ -1387,6 +1406,20 @@ class ArcadeGUI_V2:
             )
         except Exception:
             pass
+    def _style_search_entry(self, entry):
+        try:
+            entry.configure(
+                bg=COLORS["SEARCH_BG"],
+                fg="white",
+                insertbackground="white",
+                borderwidth=0,
+                highlightthickness=1,
+                highlightbackground=COLORS["SEARCH_BORDER"],
+                highlightcolor=COLORS["P1"],
+                relief="flat",
+            )
+        except Exception:
+            pass
 
     # --- Core Logic ---
     def load_settings(self):
@@ -1409,6 +1442,190 @@ class ArcadeGUI_V2:
             with open(self.settings_file, "w") as f:
                 json.dump(existing, f, indent=2)
         except: pass
+    def _workstation_default_library(self):
+        return {
+            "schema": 1,
+            "updated_at": 0.0,
+            "button_maps": {},
+            "effects": {},
+            "animations": {},
+        }
+    def _load_workstation_library(self):
+        path = getattr(self, "workstation_db_path", "")
+        if not path or not os.path.exists(path):
+            return self._workstation_default_library()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return self._workstation_default_library()
+        if not isinstance(data, dict):
+            return self._workstation_default_library()
+        base = self._workstation_default_library()
+        for key in ("button_maps", "effects", "animations"):
+            section = data.get(key, {})
+            base[key] = section if isinstance(section, dict) else {}
+        try:
+            base["updated_at"] = float(data.get("updated_at", 0.0) or 0.0)
+        except Exception:
+            base["updated_at"] = 0.0
+        return base
+    def _save_workstation_library(self):
+        try:
+            lib = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else self._workstation_default_library()
+            lib["updated_at"] = float(time.time())
+            self.workstation_library = lib
+            path = getattr(self, "workstation_db_path", "")
+            if not path:
+                return
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(lib, f, indent=2)
+        except Exception:
+            pass
+    def _controls_from_led_profile(self, leds):
+        controls = {}
+        if not isinstance(leds, dict):
+            return controls
+        for bid, state in leds.items():
+            if not isinstance(state, dict):
+                continue
+            slots = []
+            raw_colors = state.get("colors", [])
+            if isinstance(raw_colors, list):
+                for raw in raw_colors[:4]:
+                    rgb = self._coerce_rgb_slot(raw)
+                    if rgb is not None:
+                        slots.append(self._format_rgb_slot(rgb))
+            if not slots:
+                primary = self._coerce_rgb_slot(state.get("primary", (0, 0, 0))) or (0, 0, 0)
+                slots = [self._format_rgb_slot(primary)]
+            while len(slots) < 4:
+                slots.append("0,0,0")
+            controls[str(bid)] = "|".join(slots[:4])
+        return controls
+    def _normalize_controls_payload(self, payload):
+        controls = {}
+        if not isinstance(payload, dict):
+            return controls
+        raw_controls = payload.get("controls")
+        if isinstance(raw_controls, dict) and raw_controls:
+            for bid, raw in raw_controls.items():
+                if isinstance(raw, str):
+                    controls[str(bid)] = raw
+                else:
+                    rgb = self._coerce_rgb_slot(raw) or (0, 0, 0)
+                    controls[str(bid)] = self._format_rgb_slot(rgb)
+            return controls
+        raw_leds = payload.get("leds")
+        if isinstance(raw_leds, dict) and raw_leds:
+            return self._controls_from_led_profile(raw_leds)
+        return controls
+    def _sync_workstation_library(self):
+        lib = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else self._workstation_default_library()
+        button_maps = {}
+        keymaps = self.keymap_library if isinstance(getattr(self, "keymap_library", None), dict) else {}
+        for name, entry in keymaps.items():
+            controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+            if not isinstance(controls, dict) or not controls:
+                continue
+            button_maps[str(name)] = {
+                "name": str(name),
+                "controls": controls,
+                "source": "keymap",
+                "path": str(entry.get("path", "")) if isinstance(entry, dict) else "",
+            }
+        profile_dir = os.path.dirname(getattr(self, "default_profile_path", profile_file("default.json")))
+        if os.path.isdir(profile_dir):
+            for fname in os.listdir(profile_dir):
+                if not str(fname).lower().endswith(".json"):
+                    continue
+                fpath = os.path.join(profile_dir, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        pdata = json.load(f)
+                except Exception:
+                    continue
+                controls = self._normalize_controls_payload(pdata if isinstance(pdata, dict) else {})
+                if not controls:
+                    continue
+                name = str((pdata.get("name") if isinstance(pdata, dict) else "") or os.path.splitext(fname)[0]).strip()
+                if not name:
+                    continue
+                if name in button_maps:
+                    continue
+                button_maps[name] = {
+                    "name": name,
+                    "controls": controls,
+                    "source": "profile",
+                    "path": fpath,
+                }
+        effects = {}
+        fx_lib = getattr(self, "fx_library", None)
+        if fx_lib and isinstance(getattr(fx_lib, "_db", None), dict):
+            for fx in fx_lib._db.get("fx", {}).values():
+                if not isinstance(fx, dict):
+                    continue
+                name = str(fx.get("name", "")).strip()
+                if not name:
+                    continue
+                meta = fx.get("meta", {}) if isinstance(fx.get("meta", {}), dict) else {}
+                effects[name] = {
+                    "name": name,
+                    "fx_id": str(fx.get("fx_id", "")),
+                    "audio_path": str(fx.get("audio_path", "")),
+                    "source": str(meta.get("source", "")),
+                }
+        animations = {}
+        if isinstance(getattr(self, "animation_library", None), dict):
+            for name, anim in self.animation_library.items():
+                events = anim.get("events", {}) if isinstance(anim, dict) else {}
+                animations[str(name)] = {
+                    "name": str(name),
+                    "events": events if isinstance(events, dict) else {},
+                    "has_audio_sequence": bool(isinstance(anim, dict) and anim.get("audio_sequence")),
+                }
+        lib["button_maps"] = button_maps
+        lib["effects"] = effects
+        lib["animations"] = animations
+        self.workstation_library = lib
+        self._save_workstation_library()
+    def _workstation_button_map_choices(self):
+        names = set()
+        if isinstance(getattr(self, "keymap_library", None), dict):
+            names.update(str(k) for k in self.keymap_library.keys())
+        lib = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else {}
+        maps = lib.get("button_maps", {}) if isinstance(lib, dict) else {}
+        if isinstance(maps, dict):
+            names.update(str(k) for k in maps.keys())
+        return sorted([n for n in names if n], key=lambda s: str(s).lower())
+    def _workstation_button_map_controls(self, map_name):
+        name = str(map_name or "").strip()
+        if not name:
+            return {}
+        km = self.keymap_library.get(name, {}) if isinstance(getattr(self, "keymap_library", None), dict) else {}
+        if not km and isinstance(getattr(self, "keymap_library", None), dict):
+            target = name.lower()
+            for k, item in self.keymap_library.items():
+                if str(k).strip().lower() == target:
+                    km = item
+                    break
+        controls = km.get("controls", {}) if isinstance(km, dict) else {}
+        if isinstance(controls, dict) and controls:
+            return controls
+        lib = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else {}
+        maps = lib.get("button_maps", {}) if isinstance(lib, dict) else {}
+        entry = maps.get(name, {}) if isinstance(maps, dict) else {}
+        if not entry and isinstance(maps, dict):
+            target = name.lower()
+            for k, item in maps.items():
+                if str(k).strip().lower() == target:
+                    entry = item
+                    break
+        controls = entry.get("controls", {}) if isinstance(entry, dict) else {}
+        return controls if isinstance(controls, dict) else {}
     def _load_animation_library(self):
         path = self.animation_library_path
         if not os.path.exists(path):
@@ -1425,26 +1642,49 @@ class ArcadeGUI_V2:
                 json.dump(self.animation_library, f, indent=2)
         except Exception:
             pass
+        self._sync_workstation_library()
     def _load_keymap_library(self):
         os.makedirs(self.keymap_dir, exist_ok=True)
+        work_dir = getattr(self, "workstation_button_map_dir", "")
+        if work_dir:
+            os.makedirs(work_dir, exist_ok=True)
         library = {}
-        for name in os.listdir(self.keymap_dir):
-            if not name.lower().endswith(".json"):
+        search_dirs = [self.keymap_dir]
+        if work_dir and work_dir not in search_dirs:
+            search_dirs.insert(0, work_dir)
+        for directory in search_dirs:
+            if not os.path.isdir(directory):
                 continue
-            path = os.path.join(self.keymap_dir, name)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                key_name = data.get("name") or os.path.splitext(name)[0]
-                library[key_name] = {
-                    "path": path,
-                    "controls": data.get("controls", {}),
-                }
-            except Exception:
-                continue
+            for name in os.listdir(directory):
+                if not name.lower().endswith(".json"):
+                    continue
+                path = os.path.join(directory, name)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        continue
+                    controls = self._normalize_controls_payload(data)
+                    if not controls:
+                        continue
+                    key_name = data.get("name") or os.path.splitext(name)[0]
+                    key_name = str(key_name).strip()
+                    if not key_name:
+                        continue
+                    if key_name in library:
+                        continue
+                    library[key_name] = {
+                        "path": path,
+                        "controls": controls,
+                    }
+                except Exception:
+                    continue
         return library
     def _refresh_keymap_library(self):
         self.keymap_library = self._load_keymap_library()
+        self._sync_workstation_library()
     def load_controller_config(self):
         defaults = {
             "controller_type": "ALU 2P",
@@ -1972,13 +2212,13 @@ class ArcadeGUI_V2:
 
         body = tk.Frame(wrap, bg=COLORS["BG"])
         body.pack(fill="both", expand=True, pady=0)
-        body.rowconfigure(0, weight=0, minsize=550)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(0, weight=0, minsize=420)
+        body.rowconfigure(1, weight=0)
         body.rowconfigure(2, weight=0)
         body.columnconfigure(0, weight=1)
 
         canvas_wrap = tk.Frame(body, bg="#050d15")
-        canvas_wrap.grid(row=0, column=0, sticky="nsew", pady=(0, 10), padx=0)
+        canvas_wrap.grid(row=0, column=0, sticky="nsew", pady=(0, 4), padx=0)
         canvas_wrap.grid_propagate(False)
         toggle_row = tk.Frame(canvas_wrap, bg="#050d15")
         toggle_row.pack(fill="x", padx=8, pady=6)
@@ -2107,10 +2347,11 @@ class ArcadeGUI_V2:
             tk.Label(canvas_wrap, text="ALU Emulator unavailable", bg="#050d15", fg="white").pack(expand=True)
 
         loader = tk.Frame(body, bg=COLORS["BG"])
-        loader.grid(row=1, column=0, sticky="nsew")
+        loader.grid(row=1, column=0, sticky="ew")
         loader.columnconfigure(0, weight=1)
-        cards_row = tk.Frame(loader, bg=COLORS["BG"])
-        cards_row.pack(fill="both", expand=True)
+        cards_row = tk.Frame(loader, bg=COLORS["BG"], height=220)
+        cards_row.pack(fill="x", expand=False)
+        cards_row.pack_propagate(False)
         for i in range(2):
             cards_row.columnconfigure(i, weight=1)
         # Card 1: Game library (same size as others)
@@ -2135,12 +2376,17 @@ class ArcadeGUI_V2:
         self.alu_search_entry = tk.Entry(
             search_row,
             textvariable=self.alu_search_var,
-            bg=COLORS["SURFACE_LIGHT"],
+            bg=COLORS["SEARCH_BG"],
             fg="white",
             font=("Consolas", 10),
             borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=COLORS["SEARCH_BORDER"],
+            highlightcolor=COLORS["P1"],
+            relief="flat",
         )
         self.alu_search_entry.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(self.alu_search_entry)
         self.alu_search_entry.bind("<KeyRelease>", self._alu_refresh_list)
         self.alu_search_entry.bind("<Return>", self._alu_load_selected)
         ModernButton(search_row, text="LOAD", bg=COLORS["SURFACE_LIGHT"], fg="white", width=6, font=("Segoe UI", 8, "bold"),
@@ -2149,9 +2395,10 @@ class ArcadeGUI_V2:
                      command=self._alu_refresh_list).pack(side="right", padx=(6, 0))
         ModernButton(search_row, text="APPLY", bg=COLORS["SURFACE_LIGHT"], fg="white", width=6, font=("Segoe UI", 8, "bold"),
                      command=self._alu_apply_selected).pack(side="right", padx=(6, 0))
-        list_wrap = tk.Frame(lib_card, bg=COLORS["SURFACE"])
-        list_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.alu_listbox = tk.Listbox(list_wrap, bg=COLORS["SURFACE"], fg="#888", borderwidth=0, highlightthickness=0, font=("Segoe UI", 9))
+        list_wrap = tk.Frame(lib_card, bg=COLORS["SURFACE"], height=140)
+        list_wrap.pack(fill="x", expand=False, padx=10, pady=(0, 10))
+        list_wrap.pack_propagate(False)
+        self.alu_listbox = tk.Listbox(list_wrap, bg=COLORS["SURFACE"], fg="#888", borderwidth=0, highlightthickness=0, font=("Segoe UI", 9), height=6)
         self.alu_listbox.pack(side="left", fill="both", expand=True)
         vsb = tk.Scrollbar(list_wrap, orient="vertical", command=self.alu_listbox.yview)
         vsb.pack(side="right", fill="y")
@@ -2169,74 +2416,183 @@ class ArcadeGUI_V2:
             wraplength=420,
         ).pack(fill="x", padx=10, pady=(0, 8))
         self._alu_refresh_list()
-        # Card 2: Effects & Animations (for emulator preview)
+        # Card 2: Assets + Event Assignments (for emulator preview)
         fx_card = tk.Frame(cards_row, bg=COLORS["SURFACE"], highlightthickness=1, highlightbackground=COLORS["SURFACE_LIGHT"])
         fx_card.grid(row=0, column=1, sticky="nsew")
-        tk.Label(fx_card, text="EFFECTS & ANIMATIONS", bg=COLORS["SURFACE"], fg=COLORS["FX"], font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(10, 6))
+        tk.Label(fx_card, text="ASSETS & EVENT ASSIGNMENTS", bg=COLORS["SURFACE"], fg=COLORS["FX"], font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(10, 6))
 
-        top_row = tk.Frame(fx_card, bg=COLORS["SURFACE"])
-        top_row.pack(fill="x", padx=10, pady=(0, 6))
+        assets_row = tk.Frame(fx_card, bg=COLORS["SURFACE"])
+        assets_row.pack(fill="x", padx=10, pady=(0, 6))
+        assets_row.columnconfigure(0, weight=1)
+        assets_row.columnconfigure(1, weight=1)
+        assets_row.columnconfigure(2, weight=1)
 
-        # Effects list (animations registry)
-        effects_col = tk.Frame(top_row, bg=COLORS["SURFACE"])
-        effects_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        # Button maps
+        map_col = tk.Frame(assets_row, bg=COLORS["SURFACE"])
+        map_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        tk.Label(map_col, text="BUTTON MAPS", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        map_list_wrap = tk.Frame(map_col, bg=COLORS["SURFACE"], height=88)
+        map_list_wrap.pack(fill="x", expand=False)
+        map_list_wrap.pack_propagate(False)
+        self.alu_map_listbox = tk.Listbox(
+            map_list_wrap,
+            height=4,
+            bg=COLORS["SURFACE"],
+            fg="#DDD",
+            borderwidth=0,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+            exportselection=False,
+        )
+        self.alu_map_listbox.pack(side="left", fill="both", expand=True)
+        map_scroll = tk.Scrollbar(map_list_wrap, orient="vertical", command=self.alu_map_listbox.yview)
+        map_scroll.pack(side="right", fill="y")
+        self.alu_map_listbox.configure(yscrollcommand=map_scroll.set)
+        ModernButton(
+            map_col,
+            text="LOAD MAP",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._alu_apply_button_map_selection,
+        ).pack(anchor="w", pady=(4, 0))
+
+        # Effects list
+        effects_col = tk.Frame(assets_row, bg=COLORS["SURFACE"])
+        effects_col.grid(row=0, column=1, sticky="nsew", padx=6)
         tk.Label(effects_col, text="EFFECTS", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        effects_list_wrap = tk.Frame(effects_col, bg=COLORS["SURFACE"])
-        effects_list_wrap.pack(fill="both", expand=True)
-        self.alu_fx_listbox = tk.Listbox(effects_list_wrap, height=6, bg=COLORS["SURFACE"], fg="#DDD",
-                                         borderwidth=0, highlightthickness=0, font=("Segoe UI", 9), exportselection=False)
+        effects_list_wrap = tk.Frame(effects_col, bg=COLORS["SURFACE"], height=88)
+        effects_list_wrap.pack(fill="x", expand=False)
+        effects_list_wrap.pack_propagate(False)
+        self.alu_fx_listbox = tk.Listbox(
+            effects_list_wrap,
+            height=4,
+            bg=COLORS["SURFACE"],
+            fg="#DDD",
+            borderwidth=0,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+            exportselection=False,
+        )
         self.alu_fx_listbox.pack(side="left", fill="both", expand=True)
         fx_scroll = tk.Scrollbar(effects_list_wrap, orient="vertical", command=self.alu_fx_listbox.yview)
         fx_scroll.pack(side="right", fill="y")
         self.alu_fx_listbox.configure(yscrollcommand=fx_scroll.set)
-        alu_effect_items = self._get_shared_effect_options()
-        for fx in alu_effect_items:
-            self.alu_fx_listbox.insert(tk.END, fx)
-        if alu_effect_items:
-            self.alu_fx_listbox.selection_set(0)
-        ModernButton(effects_col, text="APPLY FX", bg=COLORS["SURFACE_LIGHT"], fg="white", width=9,
-                     font=("Segoe UI", 8, "bold"), command=self._alu_apply_effect_selection).pack(anchor="w", pady=(4, 0))
+        ModernButton(
+            effects_col,
+            text="APPLY FX",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._alu_apply_effect_selection,
+        ).pack(anchor="w", pady=(4, 0))
 
-        # Animation library list
-        anim_col = tk.Frame(top_row, bg=COLORS["SURFACE"])
-        anim_col.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        # Animations list
+        anim_col = tk.Frame(assets_row, bg=COLORS["SURFACE"])
+        anim_col.grid(row=0, column=2, sticky="nsew", padx=(6, 0))
         tk.Label(anim_col, text="ANIMATIONS", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
-        anim_list_wrap = tk.Frame(anim_col, bg=COLORS["SURFACE"])
-        anim_list_wrap.pack(fill="both", expand=True)
-        self.alu_anim_lib_list = tk.Listbox(anim_list_wrap, height=6, bg=COLORS["SURFACE"], fg="#DDD",
-                                            borderwidth=0, highlightthickness=0, font=("Segoe UI", 9), exportselection=False)
+        anim_list_wrap = tk.Frame(anim_col, bg=COLORS["SURFACE"], height=88)
+        anim_list_wrap.pack(fill="x", expand=False)
+        anim_list_wrap.pack_propagate(False)
+        self.alu_anim_lib_list = tk.Listbox(
+            anim_list_wrap,
+            height=4,
+            bg=COLORS["SURFACE"],
+            fg="#DDD",
+            borderwidth=0,
+            highlightthickness=0,
+            font=("Segoe UI", 9),
+            exportselection=False,
+        )
         self.alu_anim_lib_list.pack(side="left", fill="both", expand=True)
         anim_scroll = tk.Scrollbar(anim_list_wrap, orient="vertical", command=self.alu_anim_lib_list.yview)
         anim_scroll.pack(side="right", fill="y")
         self.alu_anim_lib_list.configure(yscrollcommand=anim_scroll.set)
-        for name in sorted(getattr(self, "animation_library", {}).keys()):
-            self.alu_anim_lib_list.insert(tk.END, name)
-        event_row = tk.Frame(anim_col, bg=COLORS["SURFACE"])
-        event_row.pack(fill="x", pady=(4, 0))
-        tk.Label(event_row, text="Event", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        anim_actions = tk.Frame(anim_col, bg=COLORS["SURFACE"])
+        anim_actions.pack(fill="x", pady=(4, 0))
+        tk.Label(anim_actions, text="Event", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
         self.alu_anim_event_var = tk.StringVar(value="GAME_START")
         ttk.Combobox(
-            event_row,
+            anim_actions,
             textvariable=self.alu_anim_event_var,
             values=("FE_START","FE_QUIT","SCREENSAVER_START","SCREENSAVER_STOP","LIST_CHANGE","GAME_START","GAME_QUIT","GAME_PAUSE","AUDIO_ANIMATION","SPEAK_CONTROLS","DEFAULT"),
             state="readonly",
             width=12,
             font=("Consolas", 8),
+        ).pack(side="left", padx=(6, 6))
+        ModernButton(
+            anim_actions,
+            text="APPLY ANIM",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._alu_apply_animation_selection,
+        ).pack(side="left")
+
+        # Event assignments for selected game
+        event_box = tk.LabelFrame(
+            fx_card,
+            text=" EVENT ASSIGNMENTS (SELECTED GAME) ",
+            bg=COLORS["SURFACE"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=6,
+        )
+        event_box.pack(fill="x", expand=False, padx=10, pady=(0, 6))
+        event_list_wrap = tk.Frame(event_box, bg=COLORS["SURFACE"], height=62)
+        event_list_wrap.pack(fill="x", expand=False)
+        event_list_wrap.pack_propagate(False)
+        self.alu_event_assign_listbox = tk.Listbox(
+            event_list_wrap,
+            bg=COLORS["SURFACE"],
+            fg="#DDD",
+            borderwidth=0,
+            highlightthickness=0,
+            font=("Consolas", 8),
+            exportselection=False,
+            height=3,
+        )
+        self.alu_event_assign_listbox.pack(side="left", fill="both", expand=True)
+        event_scroll = tk.Scrollbar(event_list_wrap, orient="vertical", command=self.alu_event_assign_listbox.yview)
+        event_scroll.pack(side="right", fill="y")
+        self.alu_event_assign_listbox.configure(yscrollcommand=event_scroll.set)
+        self.alu_event_assign_listbox.bind("<<ListboxSelect>>", self._alu_on_event_assignment_select)
+        event_actions = tk.Frame(event_box, bg=COLORS["SURFACE"])
+        event_actions.pack(fill="x", pady=(4, 0))
+        ModernButton(
+            event_actions,
+            text="APPLY EVENT",
+            bg=COLORS["P1"],
+            fg="black",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._alu_apply_event_assignment,
+        ).pack(side="left")
+        ModernButton(
+            event_actions,
+            text="REFRESH",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._alu_refresh_emulator_assets_panel,
         ).pack(side="left", padx=(6, 0))
-        ModernButton(anim_col, text="APPLY ANIM", bg=COLORS["SURFACE_LIGHT"], fg="white", width=10,
-                     font=("Segoe UI", 8, "bold"), command=self._alu_apply_animation_selection).pack(anchor="w", pady=(4, 0))
 
         self.alu_fx_status = tk.Label(fx_card, text="", bg=COLORS["SURFACE"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8))
         self.alu_fx_status.pack(anchor="w", padx=10, pady=(6, 8))
-        emu_tools = tk.Frame(body, bg="black", height=64)
-        emu_tools.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        emu_tools = tk.Frame(body, bg="black", height=48)
+        emu_tools.grid(row=2, column=0, sticky="ew", pady=(4, 0))
         emu_tools.pack_propagate(False)
         emu_tools_inner = tk.Frame(emu_tools, bg="black")
-        emu_tools_inner.pack(pady=14)
-        self._build_tools_buttons(emu_tools_inner, track_port=False)
+        emu_tools_inner.pack(pady=6)
+        self._build_tools_buttons(emu_tools_inner, track_port=False, compact=True)
         self.alu_last_rom = None
         self.alu_static_preview_lock = False
-        self._alu_fx_refresh_list()
+        self._alu_refresh_emulator_assets_panel()
 
     def _alu_init_leds(self):
         self.alu_led_widgets = {}
@@ -2378,6 +2734,12 @@ class ArcadeGUI_V2:
                 self.led_state[bid]['speed'] = 1.0
                 self.led_state[bid]['fx'] = [None, None, None, None]
         self.refresh_gui_from_state()
+        if hasattr(self, "fx_editor_state") and isinstance(self.fx_editor_state, dict) and self.fx_editor_state.get("grid_buttons"):
+            try:
+                self._fx_editor_sync_grid_button_colors()
+                self._fx_editor_draw_preview()
+            except Exception:
+                pass
         if apply_hardware:
             self.apply_settings_to_hardware()
 
@@ -2396,8 +2758,37 @@ class ArcadeGUI_V2:
         sel = self.alu_fx_listbox.curselection()
         if not sel:
             return
-        effect = self.alu_fx_listbox.get(sel[0])
+        effect = str(self.alu_fx_listbox.get(sel[0]) or "").strip()
+        if not effect:
+            return
         self._apply_shared_effect(effect)
+
+    def _alu_apply_button_map_selection(self):
+        if not hasattr(self, "alu_map_listbox"):
+            return
+        sel = self.alu_map_listbox.curselection()
+        if not sel:
+            if hasattr(self, "alu_fx_status"):
+                self.alu_fx_status.config(text="Select a button map first.")
+            return
+        map_name = str(self.alu_map_listbox.get(sel[0]) or "").strip()
+        if not map_name:
+            return
+        if map_name.upper() == "CURRENT DECK":
+            self._sync_alu_emulator()
+            if hasattr(self, "alu_fx_status"):
+                self.alu_fx_status.config(text="Loaded map: Current Deck.")
+            return
+        controls = self._workstation_button_map_controls(map_name)
+        if not isinstance(controls, dict) or not controls:
+            if hasattr(self, "alu_fx_status"):
+                self.alu_fx_status.config(text=f"Button map not found: {map_name}")
+            return
+        self.alu_static_preview_lock = True
+        self._load_controls_into_commander_preview(controls, apply_hardware=False)
+        self._sync_alu_emulator()
+        if hasattr(self, "alu_fx_status"):
+            self.alu_fx_status.config(text=f"Loaded map: {map_name}.")
 
     def _alu_apply_animation_selection(self):
         self.alu_static_preview_lock = False
@@ -2408,22 +2799,219 @@ class ArcadeGUI_V2:
             if hasattr(self, "alu_fx_status"):
                 self.alu_fx_status.config(text="Select an animation first.")
             return
-        name = self.alu_anim_lib_list.get(sel[0])
-        anim = getattr(self, "animation_library", {}).get(name, {})
-        if not anim:
-            if hasattr(self, "alu_fx_status"):
-                self.alu_fx_status.config(text="Animation not found.")
+        name = str(self.alu_anim_lib_list.get(sel[0]) or "").strip()
+        if not name:
             return
         event = self.alu_anim_event_var.get() if hasattr(self, "alu_anim_event_var") else "GAME_START"
-        events = anim.get("events", {})
-        seq = events.get(event, [])
-        if not seq:
-            if hasattr(self, "alu_fx_status"):
-                self.alu_fx_status.config(text=f"No {event} events for {name}.")
-            return
-        self._alu_start_animation_sequence(seq)
+        if name in getattr(self, "animation_library", {}):
+            seq = self._animation_event_sequence(name, event)
+            if isinstance(seq, list) and seq:
+                self._alu_start_animation_sequence(seq, event_key=event)
+                if hasattr(self, "alu_fx_status"):
+                    self.alu_fx_status.config(text=f"{name}: {event} sequence started ({len(seq)} steps).")
+                return
+        self._apply_shared_effect(name)
+        if hasattr(self, "alu_fx_status"):
+            self.alu_fx_status.config(text=f"Preview started: {name}")
 
-    def _alu_start_animation_sequence(self, seq):
+    def _alu_refresh_emulator_assets_panel(self):
+        self._alu_refresh_button_map_list()
+        self._alu_refresh_effect_list()
+        self._alu_refresh_animation_list()
+        self._alu_refresh_event_assignment_list()
+
+    def _alu_refresh_button_map_list(self):
+        if not hasattr(self, "alu_map_listbox"):
+            return
+        lb = self.alu_map_listbox
+        prev = lb.get(lb.curselection()[0]) if lb.curselection() else "Current Deck"
+        items = ["Current Deck"]
+        for name in self._workstation_button_map_choices():
+            label = str(name or "").strip()
+            if not label or label.upper() == "CURRENT DECK":
+                continue
+            items.append(label)
+        lb.delete(0, tk.END)
+        for item in items:
+            lb.insert(tk.END, item)
+        if items:
+            pick = prev if prev in items else "Current Deck"
+            idx = items.index(pick) if pick in items else 0
+            lb.selection_set(idx)
+            lb.activate(idx)
+
+    def _alu_refresh_effect_list(self):
+        if not hasattr(self, "alu_fx_listbox"):
+            return
+        lb = self.alu_fx_listbox
+        prev = lb.get(lb.curselection()[0]) if lb.curselection() else ""
+        entries = [
+            str(item.get("label", "")).strip()
+            for item in self._get_shared_effect_catalog()
+            if str(item.get("type", "")).strip().lower() == "effect"
+        ]
+        entries = [name for name in entries if name]
+        entries.sort(key=lambda s: s.lower())
+        lb.delete(0, tk.END)
+        for name in entries:
+            lb.insert(tk.END, name)
+        if entries:
+            idx = entries.index(prev) if prev in entries else 0
+            lb.selection_set(idx)
+            lb.activate(idx)
+
+    def _alu_refresh_animation_list(self):
+        if not hasattr(self, "alu_anim_lib_list"):
+            return
+        lb = self.alu_anim_lib_list
+        prev = lb.get(lb.curselection()[0]) if lb.curselection() else ""
+        entries = [
+            str(item.get("label", "")).strip()
+            for item in self._get_shared_effect_catalog()
+            if str(item.get("type", "")).strip().lower() == "animation"
+        ]
+        entries = [name for name in entries if name]
+        entries.sort(key=lambda s: s.lower())
+        lb.delete(0, tk.END)
+        for name in entries:
+            lb.insert(tk.END, name)
+        if entries:
+            idx = entries.index(prev) if prev in entries else 0
+            lb.selection_set(idx)
+            lb.activate(idx)
+
+    def _alu_refresh_event_assignment_list(self, rom=None):
+        if not hasattr(self, "alu_event_assign_listbox"):
+            return
+        lb = self.alu_event_assign_listbox
+        if rom is None:
+            rom = self._alu_selected_or_search_rom()
+            if not rom:
+                rom = getattr(self, "alu_last_rom", None)
+        cache = []
+        lb.delete(0, tk.END)
+        if not rom:
+            lb.insert(tk.END, "Select a game to view event assignments.")
+            self.alu_event_assign_cache = cache
+            return
+        entry = self.game_db.get(rom, {}) if isinstance(getattr(self, "game_db", None), dict) else {}
+        event_map = self._gm_build_effective_event_map(entry if isinstance(entry, dict) else {})
+        ordered = [
+            "FE_START", "FE_QUIT", "SCREENSAVER_START", "SCREENSAVER_STOP", "LIST_CHANGE",
+            "GAME_START", "GAME_QUIT", "GAME_PAUSE", "AUDIO_ANIMATION", "SPEAK_CONTROLS", "DEFAULT",
+        ]
+        seen = set()
+        keys = []
+        for key in ordered:
+            if key in event_map:
+                keys.append(key)
+                seen.add(key)
+        for key in sorted(event_map.keys()):
+            if key not in seen:
+                keys.append(key)
+        for event in keys:
+            raw = event_map.get(event)
+            anim = ""
+            bmap = "Current Deck"
+            if isinstance(raw, dict):
+                anim = str(raw.get("animation", "") or "").strip()
+                bmap = str(raw.get("button_map", "Current Deck") or "Current Deck").strip() or "Current Deck"
+            elif isinstance(raw, str):
+                anim = str(raw).strip()
+            elif isinstance(raw, list):
+                anim = str(raw[0].get("anim", "SEQUENCE") if raw and isinstance(raw[0], dict) else "SEQUENCE")
+            if not anim:
+                continue
+            cache.append({"event": str(event), "animation": anim, "button_map": bmap})
+            lb.insert(tk.END, f"{event:<16} -> {anim} ({bmap})")
+        self.alu_event_assign_cache = cache
+        if not cache:
+            lb.insert(tk.END, "No event assignments found for selected game.")
+        else:
+            lb.selection_set(0)
+            lb.activate(0)
+            self._alu_on_event_assignment_select()
+
+    def _alu_selected_event_assignment(self):
+        if not hasattr(self, "alu_event_assign_listbox"):
+            return None
+        sel = self.alu_event_assign_listbox.curselection()
+        if not sel:
+            return None
+        idx = int(sel[0])
+        cache = getattr(self, "alu_event_assign_cache", [])
+        if idx < 0 or idx >= len(cache):
+            return None
+        item = cache[idx]
+        return item if isinstance(item, dict) else None
+
+    def _alu_on_event_assignment_select(self, _evt=None):
+        item = self._alu_selected_event_assignment()
+        if not item:
+            return
+        event = str(item.get("event", "")).strip()
+        anim = str(item.get("animation", "")).strip()
+        bmap = str(item.get("button_map", "Current Deck") or "Current Deck").strip()
+        if event and hasattr(self, "alu_anim_event_var"):
+            self.alu_anim_event_var.set(event)
+        if anim and hasattr(self, "alu_anim_lib_list"):
+            matched_anim = False
+            for i in range(self.alu_anim_lib_list.size()):
+                if str(self.alu_anim_lib_list.get(i)).strip().upper() == anim.upper():
+                    self.alu_anim_lib_list.selection_clear(0, tk.END)
+                    self.alu_anim_lib_list.selection_set(i)
+                    self.alu_anim_lib_list.activate(i)
+                    self.alu_anim_lib_list.see(i)
+                    matched_anim = True
+                    break
+            if not matched_anim and hasattr(self, "alu_fx_listbox"):
+                for i in range(self.alu_fx_listbox.size()):
+                    if str(self.alu_fx_listbox.get(i)).strip().upper() == anim.upper():
+                        self.alu_fx_listbox.selection_clear(0, tk.END)
+                        self.alu_fx_listbox.selection_set(i)
+                        self.alu_fx_listbox.activate(i)
+                        self.alu_fx_listbox.see(i)
+                        break
+        if bmap and hasattr(self, "alu_map_listbox"):
+            for i in range(self.alu_map_listbox.size()):
+                if str(self.alu_map_listbox.get(i)).strip().upper() == bmap.upper():
+                    self.alu_map_listbox.selection_clear(0, tk.END)
+                    self.alu_map_listbox.selection_set(i)
+                    self.alu_map_listbox.activate(i)
+                    self.alu_map_listbox.see(i)
+                    break
+
+    def _alu_apply_event_assignment(self):
+        item = self._alu_selected_event_assignment()
+        if not item:
+            if hasattr(self, "alu_fx_status"):
+                self.alu_fx_status.config(text="Select an event assignment first.")
+            return
+        event = str(item.get("event", "")).strip() or "GAME_START"
+        animation = str(item.get("animation", "")).strip()
+        button_map = str(item.get("button_map", "Current Deck") or "Current Deck").strip() or "Current Deck"
+        if button_map.upper() != "CURRENT DECK":
+            controls = self._workstation_button_map_controls(button_map)
+            if isinstance(controls, dict) and controls:
+                self.alu_static_preview_lock = True
+                self._load_controls_into_commander_preview(controls, apply_hardware=False)
+                self._sync_alu_emulator()
+        if animation and animation.upper() != "NONE":
+            if animation in getattr(self, "animation_library", {}):
+                seq = self._animation_event_sequence(animation, event)
+                if isinstance(seq, list) and seq:
+                    self._alu_start_animation_sequence(seq, event_key=event)
+                    if hasattr(self, "alu_fx_status"):
+                        self.alu_fx_status.config(text=f"Event {event}: sequence started ({animation}, {button_map}).")
+                    return
+            self._apply_shared_effect(animation)
+            if hasattr(self, "alu_fx_status"):
+                self.alu_fx_status.config(text=f"Event {event}: applied {animation} ({button_map}).")
+            return
+        if hasattr(self, "alu_fx_status"):
+            self.alu_fx_status.config(text=f"Event {event}: map applied ({button_map}), no animation.")
+
+    def _alu_start_animation_sequence(self, seq, event_key="GAME_START"):
         self.alu_static_preview_lock = False
         if not isinstance(seq, list) or not seq:
             return
@@ -2445,7 +3033,7 @@ class ArcadeGUI_V2:
                 dur = float(step.get("duration", 2.0))
             except Exception:
                 dur = 2.0
-            queue.append({"anim": anim, "duration": max(0.1, dur)})
+            queue.extend(self._expand_animation_step_for_queue(anim, max(0.1, dur), event_key))
         if not queue:
             return
         self._alu_anim_seq_queue = queue
@@ -2472,6 +3060,8 @@ class ArcadeGUI_V2:
             return
         q = (self.alu_search_var.get() or "").lower()
         self.alu_listbox.delete(0, tk.END)
+        if hasattr(self, "alu_event_assign_listbox"):
+            self._alu_refresh_event_assignment_list(rom="")
         self.alu_label_to_rom = {}
         title_key = self.game_title_key if hasattr(self, "game_title_key") else None
         if getattr(self, "game_rows", None) and title_key:
@@ -2542,6 +3132,7 @@ class ArcadeGUI_V2:
         self._load_controls_into_commander_preview(entry.get("controls", {}) or {}, apply_hardware=False)
         self._alu_preview_from_rom(rom)
         self._alu_update_game_meta(rom)
+        self._alu_refresh_event_assignment_list(rom)
 
     def _format_event_summary_items(self, event_map):
         if not isinstance(event_map, dict):
@@ -2690,6 +3281,27 @@ class ArcadeGUI_V2:
                 return rom_val
         title = row.get(title_key, "") if title_key else ""
         return self._rom_key_from_title(title)
+    def _resolve_db_key(self, rom_key):
+        if not isinstance(getattr(self, "game_db", None), dict):
+            return ""
+        key = str(rom_key or "").strip()
+        if not key:
+            return ""
+        if key in self.game_db:
+            return key
+        key_lower = key.lower()
+        for existing in self.game_db.keys():
+            if str(existing).strip().lower() == key_lower:
+                return existing
+        return ""
+    def _db_entry(self, rom_key):
+        real_key = self._resolve_db_key(rom_key)
+        if not real_key:
+            return {}, ""
+        entry = self.game_db.get(real_key, {})
+        if not isinstance(entry, dict):
+            entry = {}
+        return entry, real_key
     def _load_game_db(self):
         path = getattr(self, "game_db_path", game_db_file())
         if not os.path.exists(path):
@@ -2747,17 +3359,18 @@ class ArcadeGUI_V2:
         rows = []
 
         for rom in sorted(getattr(self, "game_db", {}).keys(), key=lambda s: str(s).lower()):
-            rom_l = str(rom).strip().lower()
+            rom_s = str(rom).strip()
+            rom_l = rom_s.lower()
             if not rom_l:
                 continue
-            entry = self.game_db.get(rom_l, {})
+            entry = self.game_db.get(rom, {})
             if not isinstance(entry, dict):
                 continue
             md = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
             override = entry.get("catalog_override", {}) if isinstance(entry.get("catalog_override"), dict) else {}
             base = entry.get("catalog_base", {}) if isinstance(entry.get("catalog_base"), dict) else {}
             row = {h: "" for h in headers}
-            row[rom_col] = rom_l
+            row[rom_col] = rom_s
             row[title_col] = (
                 str(override.get("title", "")).strip()
                 or str(md.get("title", "")).strip()
@@ -2918,8 +3531,11 @@ class ArcadeGUI_V2:
         tk.Label(library, text="GAME LIBRARY", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
         search_row = tk.Frame(library, bg=COLORS["CHARCOAL"])
         search_row.pack(fill="x", pady=(6, 6))
-        self.game_search = tk.Entry(search_row, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
+        self.game_search = tk.Entry(search_row, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 9),
+                                    highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                    highlightcolor=COLORS["P1"], relief="flat")
         self.game_search.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(self.game_search)
         self.game_search.bind("<KeyRelease>", self._refresh_game_list)
         # Column selection isn't applicable on the main screen.
 
@@ -3112,25 +3728,33 @@ class ArcadeGUI_V2:
         bar = tk.Frame(parent, bg="black", height=70); bar.pack(side="bottom", fill="x")
         inner = tk.Frame(bar, bg="black"); inner.pack(pady=18)
         self._build_tools_buttons(inner, track_port=True)
-    def _build_tools_buttons(self, inner, track_port=False):
-        def sep(): tk.Frame(inner, bg=COLORS["SURFACE_LIGHT"], width=1, height=22).pack(side="left", padx=10)
-        def btn(t, c, cmd, w=10, f="white"): 
-            b = ModernButton(inner, text=t, bg=c, fg=f, width=w, font=("Segoe UI", 8, "bold"), command=cmd)
-            b.pack(side="left", padx=4); return b
-        btn("APPLY", COLORS["SYS"], self.apply_settings_to_hardware, w=10, f="black"); sep()
-        btn("ALL OFF", COLORS["DANGER"], self.all_off, w=9)
-        btn("BTN TEST", COLORS["SURFACE_LIGHT"], self.open_button_test, w=9); sep()
-        btn("SWAP FIGHT", COLORS["P1"], self.swap_fight_buttons, w=10)
-        btn("SWAP START", COLORS["P2"], self.swap_start_buttons, w=10); sep()
-        btn("LED TEST", COLORS["SYS"], self.show_tester_menu, w=9, f="black")
-        btn("CYCLE", COLORS["SURFACE_LIGHT"], self.start_cycle_mode, w=8)
-        btn("DEMO", COLORS["SURFACE_LIGHT"], self.start_demo_mode, w=8); sep()
-        port_btn = btn("PORT", COLORS["SURFACE_LIGHT"], lambda: self.prompt_for_port(), w=8)
+    def _build_tools_buttons(self, inner, track_port=False, compact=False):
+        sep_pad = 6 if compact else 10
+        sep_h = 20 if compact else 22
+        btn_pad = 2 if compact else 4
+        btn_font = ("Segoe UI", 7, "bold") if compact else ("Segoe UI", 8, "bold")
+        def wsz(normal, tight):
+            return tight if compact else normal
+        def sep():
+            tk.Frame(inner, bg=COLORS["SURFACE_LIGHT"], width=1, height=sep_h).pack(side="left", padx=sep_pad)
+        def btn(t, c, cmd, w=10, f="white"):
+            b = ModernButton(inner, text=t, bg=c, fg=f, width=w, font=btn_font, command=cmd)
+            b.pack(side="left", padx=btn_pad)
+            return b
+        btn("APPLY", COLORS["SYS"], self.apply_settings_to_hardware, w=wsz(10, 8), f="black"); sep()
+        btn("ALL OFF", COLORS["DANGER"], self.all_off, w=wsz(9, 8))
+        btn("BTN TEST", COLORS["SURFACE_LIGHT"], self.open_button_test, w=wsz(9, 8)); sep()
+        btn("SWAP FIGHT", COLORS["P1"], self.swap_fight_buttons, w=wsz(10, 9))
+        btn("SWAP START", COLORS["P2"], self.swap_start_buttons, w=wsz(10, 9)); sep()
+        btn("LED TEST", COLORS["SYS"], self.show_tester_menu, w=wsz(9, 8), f="black")
+        btn("CYCLE", COLORS["SURFACE_LIGHT"], self.start_cycle_mode, w=wsz(8, 7))
+        btn("DEMO", COLORS["SURFACE_LIGHT"], self.start_demo_mode, w=wsz(8, 7)); sep()
+        port_btn = btn("PORT", COLORS["SURFACE_LIGHT"], lambda: self.prompt_for_port(), w=wsz(8, 7))
         if track_port or not hasattr(self, "port_btn"):
             self.port_btn = port_btn
-        btn("ABOUT", COLORS["SURFACE_LIGHT"], self.show_about, w=8)
-        btn("HELP", COLORS["SURFACE_LIGHT"], self.show_help, w=8)
-        btn("QUIT", COLORS["DANGER"], self.quit_now, w=8)
+        btn("ABOUT", COLORS["SURFACE_LIGHT"], self.show_about, w=wsz(8, 7))
+        btn("HELP", COLORS["SURFACE_LIGHT"], self.show_help, w=wsz(8, 7))
+        btn("QUIT", COLORS["DANGER"], self.quit_now, w=wsz(8, 7))
     def build_status_strip(self):
         parent = self.tab_main if hasattr(self, "tab_main") else self.root
         s = tk.Frame(parent, bg=COLORS["BG"]); s.pack(side="bottom", fill="x", padx=30, pady=5)
@@ -3450,8 +4074,7 @@ class ArcadeGUI_V2:
         map_name = str(button_map or "Current Deck").strip() or "Current Deck"
         if map_name != "Current Deck":
             self._refresh_keymap_library()
-            km = self.keymap_library.get(map_name, {}) if isinstance(getattr(self, "keymap_library", {}), dict) else {}
-            controls = km.get("controls", {}) if isinstance(km, dict) else {}
+            controls = self._workstation_button_map_controls(map_name)
             if isinstance(controls, dict) and controls:
                 return controls
         entry = self.game_db.get(rom_key, {}) if isinstance(getattr(self, "game_db", None), dict) else {}
@@ -3511,7 +4134,7 @@ class ArcadeGUI_V2:
                     if isinstance(seq, list) and seq:
                         break
         if seq and hw_connected:
-            self._alu_start_animation_sequence(seq)
+            self._alu_start_animation_sequence(seq, event_key=event_key)
             return f"{event_key}: {anim_name} ({button_map}) seq={len(seq)}"
         if hw_connected:
             self.preview_animation(anim_name)
@@ -3663,11 +4286,10 @@ class ArcadeGUI_V2:
         self.root.update_idletasks()
         if hasattr(self, "_refresh_fx_list"):
             self._refresh_fx_list()
-        if not hasattr(self, "fx_list") or int(self.fx_list.size()) <= 0:
-            raise RuntimeError("FX game list is empty")
-        if not self._dev_smoke_select_rom_in_mapped_list(self.fx_list, getattr(self, "fx_title_to_rom", {}), rom_key):
-            raise RuntimeError("SmokeTest was not found in FX game list")
-        self._on_fx_select()
+        if hasattr(self, "fx_list") and int(self.fx_list.size()) > 0:
+            if not self._dev_smoke_select_rom_in_mapped_list(self.fx_list, getattr(self, "fx_title_to_rom", {}), rom_key):
+                raise RuntimeError("SmokeTest was not found in FX game list")
+            self._on_fx_select()
         # Assign Full Range to all buttons in FX Editor assignment matrix.
         if "assign_var" in self.fx_editor_state and "assign_group_var" in self.fx_editor_state:
             self.fx_editor_state["assign_var"].set("Full Range")
@@ -4590,8 +5212,11 @@ class ArcadeGUI_V2:
         tk.Label(left, text="GAME LIBRARY", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 10, "bold")).pack(anchor="w")
         search_row = tk.Frame(left, bg=COLORS["CHARCOAL"])
         search_row.pack(fill="x", pady=(6, 6))
-        self.gm_search = tk.Entry(search_row, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
+        self.gm_search = tk.Entry(search_row, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 9),
+                                  highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                  highlightcolor=COLORS["P1"], relief="flat")
         self.gm_search.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(self.gm_search)
         self.gm_search.bind("<KeyRelease>", self._refresh_gm_list)
         ModernButton(
             search_row,
@@ -4603,7 +5228,7 @@ class ArcadeGUI_V2:
             command=self.gm_new_game,
         ).pack(side="right", padx=(6, 0))
 
-        list_wrap = tk.Frame(left, bg=COLORS["CHARCOAL"], height=300)
+        list_wrap = tk.Frame(left, bg=COLORS["CHARCOAL"], height=220)
         list_wrap.pack(fill="x", expand=False, pady=(0, 8))
         list_wrap.pack_propagate(False)
         self.gm_list = tk.Listbox(list_wrap, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, highlightthickness=0,
@@ -4679,9 +5304,19 @@ class ArcadeGUI_V2:
         ).pack(side="left", fill="x", expand=True)
 
         tk.Frame(bottom, bg=COLORS["SURFACE_LIGHT"], height=1).pack(fill="x", pady=(0, 8))
-        tk.Label(bottom, text="PROFILE", bg=COLORS["CHARCOAL"], fg=COLORS["P1"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
-        profile = tk.Frame(bottom, bg=COLORS["CHARCOAL"])
-        profile.pack(fill="x", pady=(6, 0))
+        tk.Label(bottom, text="WORKSPACE", bg=COLORS["CHARCOAL"], fg=COLORS["P1"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        workspace = tk.Frame(bottom, bg=COLORS["CHARCOAL"])
+        workspace.pack(fill="both", expand=True, pady=(6, 0))
+        workspace_tabs = ttk.Notebook(workspace)
+        workspace_tabs.pack(fill="both", expand=True)
+        profile_tab = tk.Frame(workspace_tabs, bg=COLORS["CHARCOAL"])
+        assign_tab = tk.Frame(workspace_tabs, bg=COLORS["CHARCOAL"])
+        preview_tab = tk.Frame(workspace_tabs, bg=COLORS["CHARCOAL"])
+        workspace_tabs.add(profile_tab, text="Profile")
+        workspace_tabs.add(assign_tab, text="Assignments")
+        workspace_tabs.add(preview_tab, text="Map Preview")
+        profile = tk.Frame(profile_tab, bg=COLORS["CHARCOAL"])
+        profile.pack(fill="both", expand=True, padx=6, pady=6)
 
         self.gm_fields["vendor"] = tk.StringVar(value="")
         self.gm_fields["controller_mode"] = tk.StringVar(value="ARCADE_PANEL")
@@ -4743,10 +5378,7 @@ class ArcadeGUI_V2:
         self.gm_fields["quick_event"] = tk.StringVar(value="GAME_START")
         self.gm_fields["quick_anim"] = tk.StringVar(value="")
         self.gm_fields["quick_map"] = tk.StringVar(value="Current Deck")
-        quick_event_values = (
-            "FE_START", "FE_QUIT", "SCREENSAVER_START", "SCREENSAVER_STOP", "LIST_CHANGE",
-            "GAME_START", "GAME_QUIT", "GAME_PAUSE", "AUDIO_ANIMATION", "SPEAK_CONTROLS", "DEFAULT"
-        )
+        quick_event_values = self._gm_known_events()
         quick_event_combo = ttk.Combobox(
             quick_inner,
             textvariable=self.gm_fields["quick_event"],
@@ -4788,6 +5420,15 @@ class ArcadeGUI_V2:
         ).pack(side="left", padx=(0, 6))
         ModernButton(
             quick_inner,
+            text="ASSIGN ALL",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=11,
+            font=("Segoe UI", 8, "bold"),
+            command=self._gm_assign_all_quick_events,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            quick_inner,
             text="PREVIEW",
             bg=COLORS["P1"],
             fg="black",
@@ -4800,7 +5441,7 @@ class ArcadeGUI_V2:
         tk.Label(details_row, text="Details:", width=12, anchor="nw", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", anchor="n")
         details_wrap = tk.Frame(details_row, bg=COLORS["CHARCOAL"])
         details_wrap.pack(side="left", fill="both", expand=True)
-        self.gm_fields["event_details"] = tk.Text(details_wrap, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["event_details"] = tk.Text(details_wrap, height=2, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                   borderwidth=0, highlightthickness=0, font=("Consolas", 8))
         self.gm_fields["event_details"].pack(side="left", fill="both", expand=True)
         details_scroll = tk.Scrollbar(details_wrap, orient="vertical", command=self.gm_fields["event_details"].yview)
@@ -4809,39 +5450,48 @@ class ArcadeGUI_V2:
         self.gm_fields["event_details"].configure(yscrollcommand=details_scroll.set, state="disabled")
 
         # Event Assignment panel (Button Map + Animation + Event)
-        assign_panel = tk.LabelFrame(profile, text=" EVENT ASSIGNMENT ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
+        assign_panel = tk.LabelFrame(assign_tab, text=" EVENT ASSIGNMENT ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
                                      font=("Segoe UI", 8, "bold"), padx=8, pady=6)
-        assign_panel.pack(fill="x", pady=(8, 0))
+        assign_panel.pack(fill="both", expand=True, padx=6, pady=6)
         lists_row = tk.Frame(assign_panel, bg=COLORS["CHARCOAL"])
         lists_row.pack(fill="x")
         # Button Map list
         bm_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
         bm_col.pack(side="left", fill="both", expand=True, padx=(0, 6))
         tk.Label(bm_col, text="BUTTON MAP", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold")).pack(anchor="w")
-        self.gm_fields["btn_map_search"] = tk.Entry(bm_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
+        self.gm_fields["btn_map_search"] = tk.Entry(bm_col, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 8),
+                                                    highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                                    highlightcolor=COLORS["P1"], relief="flat")
         self.gm_fields["btn_map_search"].pack(fill="x", pady=(2, 4))
+        self._style_search_entry(self.gm_fields["btn_map_search"])
         self.gm_fields["btn_map_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["btn_map_list"] = tk.Listbox(bm_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["btn_map_list"] = tk.Listbox(bm_col, height=2, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                     borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["btn_map_list"].pack(fill="both", expand=True)
         # Animations list
         an_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
         an_col.pack(side="left", fill="both", expand=True, padx=(6, 6))
         tk.Label(an_col, text="EFFECT / ANIMATION", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold")).pack(anchor="w")
-        self.gm_fields["anim_search"] = tk.Entry(an_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
+        self.gm_fields["anim_search"] = tk.Entry(an_col, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 8),
+                                                 highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                                 highlightcolor=COLORS["P1"], relief="flat")
         self.gm_fields["anim_search"].pack(fill="x", pady=(2, 4))
+        self._style_search_entry(self.gm_fields["anim_search"])
         self.gm_fields["anim_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["anim_list"] = tk.Listbox(an_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["anim_list"] = tk.Listbox(an_col, height=2, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                  borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["anim_list"].pack(fill="both", expand=True)
         # Events list
         ev_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
         ev_col.pack(side="left", fill="both", expand=True, padx=(6, 0))
         tk.Label(ev_col, text="EVENT", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold")).pack(anchor="w")
-        self.gm_fields["event_search"] = tk.Entry(ev_col, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 8))
+        self.gm_fields["event_search"] = tk.Entry(ev_col, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 8),
+                                                  highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                                  highlightcolor=COLORS["P1"], relief="flat")
         self.gm_fields["event_search"].pack(fill="x", pady=(2, 4))
+        self._style_search_entry(self.gm_fields["event_search"])
         self.gm_fields["event_search"].bind("<KeyRelease>", self._gm_filter_event_lists)
-        self.gm_fields["event_list"] = tk.Listbox(ev_col, height=4, bg=COLORS["SURFACE_LIGHT"], fg="white",
+        self.gm_fields["event_list"] = tk.Listbox(ev_col, height=2, bg=COLORS["SURFACE_LIGHT"], fg="white",
                                                   borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
         self.gm_fields["event_list"].pack(fill="both", expand=True)
 
@@ -4858,7 +5508,7 @@ class ArcadeGUI_V2:
                  font=("Segoe UI", 8)).pack(anchor="w", pady=(4, 0))
 
         gm_preview = tk.LabelFrame(
-            profile,
+            preview_tab,
             text=" MAP PREVIEW ",
             bg=COLORS["CHARCOAL"],
             fg=COLORS["SYS"],
@@ -4866,14 +5516,14 @@ class ArcadeGUI_V2:
             padx=6,
             pady=6,
         )
-        gm_preview.pack(fill="x", pady=(8, 0))
-        self.gm_preview_canvas = tk.Canvas(gm_preview, height=170, bg=COLORS["SURFACE"], highlightthickness=0)
-        self.gm_preview_canvas.pack(fill="x")
+        gm_preview.pack(fill="both", expand=True, padx=6, pady=6)
+        self.gm_preview_canvas = tk.Canvas(gm_preview, height=104, bg=COLORS["SURFACE"], highlightthickness=0)
+        self.gm_preview_canvas.pack(fill="both", expand=True)
         self.gm_preview_controls = {}
         self.gm_preview_canvas.bind("<Configure>", lambda _e: self._gm_draw_map_preview(self.gm_preview_controls))
         self._gm_draw_map_preview({})
 
-        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=6)
+        row = tk.Frame(profile, bg=COLORS["CHARCOAL"]); row.pack(fill="x", pady=4)
         tk.Checkbutton(
             row,
             text="Enable Override",
@@ -4946,8 +5596,11 @@ class ArcadeGUI_V2:
         tk.Label(left, text="GAME LIBRARY", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 10, "bold")).pack(anchor="w")
         fx_search_row = tk.Frame(left, bg=COLORS["CHARCOAL"])
         fx_search_row.pack(fill="x", pady=(6, 6))
-        self.fx_search = tk.Entry(fx_search_row, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
+        self.fx_search = tk.Entry(fx_search_row, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 9),
+                                  highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                                  highlightcolor=COLORS["P1"], relief="flat")
         self.fx_search.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(self.fx_search)
         self.fx_search.bind("<KeyRelease>", self._refresh_fx_list)
         ModernButton(
             fx_search_row,
@@ -5143,8 +5796,11 @@ class ArcadeGUI_V2:
         lib = tk.LabelFrame(fx_right, text=" FX LIBRARY ", bg=COLORS["BG"], fg=COLORS["SYS"], font=("Segoe UI", 9, "bold"), padx=10, pady=8)
         lib.pack(fill="x", pady=(12, 0))
         self.fx_lib_search = tk.StringVar(value="")
-        lib_search = tk.Entry(lib, textvariable=self.fx_lib_search, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
+        lib_search = tk.Entry(lib, textvariable=self.fx_lib_search, bg=COLORS["SEARCH_BG"], fg="white", borderwidth=0, font=("Consolas", 9),
+                              highlightthickness=1, highlightbackground=COLORS["SEARCH_BORDER"],
+                              highlightcolor=COLORS["P1"], relief="flat")
         lib_search.pack(fill="x")
+        self._style_search_entry(lib_search)
         lib_search.bind("<KeyRelease>", self._fx_tab_library_refresh)
         lib_filter_row = tk.Frame(lib, bg=COLORS["BG"])
         lib_filter_row.pack(fill="x", pady=(6, 0))
@@ -5450,22 +6106,22 @@ class ArcadeGUI_V2:
         name = simpledialog.askstring("Save Key Mapping", "Keymap name:")
         if not name:
             return
+        name = str(name).strip()
+        if not name:
+            return
         controls = self._collect_controls_from_led_state(include_slots=True)
         payload = {
             "name": name,
             "controls": controls,
             "saved_at": time.time(),
         }
-        os.makedirs(self.keymap_dir, exist_ok=True)
-        path = filedialog.asksaveasfilename(
-            title="Save Key Mapping",
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json")],
-            initialfile=f"{name}.json",
-            initialdir=self.keymap_dir,
-        )
-        if not path:
-            return
+        target_dir = getattr(self, "workstation_button_map_dir", "") or self.keymap_dir
+        os.makedirs(target_dir, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9 ]+", "", name).strip() or "ButtonMap"
+        path = os.path.join(target_dir, f"{safe}.json")
+        if os.path.exists(path):
+            if not messagebox.askyesno("Overwrite Map", f"Map already exists:\n{path}\n\nOverwrite it?"):
+                return
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         self._refresh_keymap_library()
@@ -5488,8 +6144,10 @@ class ArcadeGUI_V2:
         rom_key = self._row_rom_key(row, self.game_col_map, title_key)
         if not rom_key:
             rom_key = self._rom_key_from_title(title)
+        entry, resolved_key = self._db_entry(rom_key)
+        if resolved_key:
+            rom_key = resolved_key
         self.gm_selected_rom = rom_key
-        entry = self.game_db.get(rom_key, {})
         profile = entry.get("profile", {})
         metadata = entry.get("metadata", {}) if isinstance(entry.get("metadata"), dict) else {}
         catalog_override = entry.get("catalog_override", {}) or entry.get("catalog", {})
@@ -5559,7 +6217,7 @@ class ArcadeGUI_V2:
         # Populate assignment lists
         if "btn_map_list" in self.gm_fields:
             self._refresh_keymap_library()
-            items = ["Current Deck"] + sorted(self.keymap_library.keys())
+            items = ["Current Deck"] + self._workstation_button_map_choices()
             self.gm_fields["btn_map_items"] = items
         if "anim_list" in self.gm_fields:
             items = list(self._gm_assignable_effect_options(entry))
@@ -5572,7 +6230,7 @@ class ArcadeGUI_V2:
             quick_anims = self._gm_assignable_effect_options(entry)
             self.gm_fields["quick_anim_combo"]["values"] = tuple(quick_anims)
         if "quick_map_combo" in self.gm_fields:
-            quick_maps = ["Current Deck"] + sorted(self.keymap_library.keys())
+            quick_maps = ["Current Deck"] + self._workstation_button_map_choices()
             self.gm_fields["quick_map_combo"]["values"] = tuple(quick_maps)
         if "quick_event" in self.gm_fields:
             qev = self.gm_fields["quick_event"].get().strip() or "GAME_START"
@@ -5700,11 +6358,24 @@ class ArcadeGUI_V2:
         if profile.get("default_fx"):
             event_map.setdefault("DEFAULT", {"animation": profile.get("default_fx"), "button_map": "Current Deck"})
         return event_map
+    def _gm_known_events(self):
+        return (
+            "FE_START",
+            "FE_QUIT",
+            "SCREENSAVER_START",
+            "SCREENSAVER_STOP",
+            "LIST_CHANGE",
+            "GAME_START",
+            "GAME_QUIT",
+            "GAME_PAUSE",
+            "AUDIO_ANIMATION",
+            "SPEAK_CONTROLS",
+            "DEFAULT",
+        )
     def _gm_controls_from_button_map(self, button_map):
         map_name = str(button_map or "Current Deck").strip() or "Current Deck"
         if map_name != "Current Deck":
-            km = self.keymap_library.get(map_name, {}) if isinstance(getattr(self, "keymap_library", {}), dict) else {}
-            controls = km.get("controls", {}) if isinstance(km, dict) else {}
+            controls = self._workstation_button_map_controls(map_name)
             if isinstance(controls, dict) and controls:
                 return controls
         entry = self.game_db.get(self.gm_selected_rom, {}) if self.gm_selected_rom else {}
@@ -5717,7 +6388,7 @@ class ArcadeGUI_V2:
         c = self.gm_preview_canvas
         c.delete("all")
         w = max(720, int(c.winfo_width() or 720))
-        h = max(170, int(c.winfo_height() or 170))
+        h = max(104, int(c.winfo_height() or 104))
         c.config(width=w, height=h)
         def color_for(key):
             val = self.gm_preview_controls.get(key)
@@ -5726,11 +6397,19 @@ class ArcadeGUI_V2:
         def draw_btn(x, y, r, key, label):
             fill = color_for(key)
             c.create_oval(x-r, y-r, x+r, y+r, fill=fill, outline="#4a4a4a", width=1)
-            c.create_text(x, y+r+10, text=label, fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
-        c.create_text(int(w*0.16), 16, text="PLAYER 1", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
-        c.create_text(int(w*0.50), 16, text="ADMIN", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
-        c.create_text(int(w*0.84), 16, text="PLAYER 2", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
-        p1x = int(w*0.16); p2x = int(w*0.84); ay = 56; by = 96; step = 44; r = 16
+            c.create_text(x, y+r+8, text=label, fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
+        compact = h < 120
+        title_y = 10 if compact else 14
+        ay = 32 if compact else 46
+        by = 56 if compact else 80
+        step = 30 if compact else 40
+        r = 10 if compact else 14
+        tb_y = 78 if compact else 112
+        tr = 14 if compact else 20
+        c.create_text(int(w*0.16), title_y, text="PLAYER 1", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        c.create_text(int(w*0.50), title_y, text="ADMIN", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        c.create_text(int(w*0.84), title_y, text="PLAYER 2", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold"))
+        p1x = int(w*0.16); p2x = int(w*0.84)
         draw_btn(p1x-step, ay, r, "P1_A", "A"); draw_btn(p1x, ay, r, "P1_B", "B"); draw_btn(p1x+step, ay, r, "P1_C", "C")
         draw_btn(p1x-step, by, r, "P1_X", "X"); draw_btn(p1x, by, r, "P1_Y", "Y"); draw_btn(p1x+step, by, r, "P1_Z", "Z")
         draw_btn(p2x-step, ay, r, "P2_A", "A"); draw_btn(p2x, ay, r, "P2_B", "B"); draw_btn(p2x+step, ay, r, "P2_C", "C")
@@ -5740,10 +6419,9 @@ class ArcadeGUI_V2:
         draw_btn(ax-22, ay, r, "P2_START", "P2")
         draw_btn(ax+26, ay, r, "REWIND", "RWD")
         draw_btn(ax+74, ay, r, "MENU", "MENU")
-        tr = 26
         tfill = color_for("TRACKBALL")
-        c.create_oval(ax-tr, 126-tr, ax+tr, 126+tr, fill=tfill, outline="#4a4a4a", width=1)
-        c.create_text(ax, 126, text="TB", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
+        c.create_oval(ax-tr, tb_y-tr, ax+tr, tb_y+tr, fill=tfill, outline="#4a4a4a", width=1)
+        c.create_text(ax, tb_y, text="TB", fill=COLORS["TEXT_DIM"], font=("Segoe UI", 7, "bold"))
     def _gm_preview_assignment(self):
         if not self.gm_selected_rom:
             messagebox.showinfo("Preview", "Select a game first.")
@@ -5804,7 +6482,7 @@ class ArcadeGUI_V2:
                         for key in sequence_keys:
                             seq = event_block.get(key, [])
                             if isinstance(seq, list) and seq:
-                                self._alu_start_animation_sequence(seq)
+                                self._alu_start_animation_sequence(seq, event_key=event)
                                 status += f" | Sequence started ({len(seq)} steps)."
                                 played_sequence = True
                                 break
@@ -5826,6 +6504,63 @@ class ArcadeGUI_V2:
             messagebox.showinfo("Assign", "Select an Effect/Animation (or NONE to clear).")
             return
         self._gm_assign_event_values(event, anim, bmap)
+    def _gm_assign_all_quick_events(self):
+        if not self.gm_selected_rom:
+            messagebox.showinfo("Assign All", "Select a game first.")
+            return
+        anim = str(self.gm_fields.get("quick_anim").get() if "quick_anim" in self.gm_fields else "").strip()
+        bmap = str(self.gm_fields.get("quick_map").get() if "quick_map" in self.gm_fields else "Current Deck").strip() or "Current Deck"
+        if not anim:
+            messagebox.showinfo("Assign All", "Select an Effect/Animation (or NONE to clear).")
+            return
+        events_to_update = self._gm_known_events()
+        if not events_to_update:
+            return
+        clearing = anim.upper() == "NONE"
+        if clearing:
+            ok = messagebox.askyesno(
+                "Clear All Events",
+                f"Clear all event assignments for this game?\n\nEvents: {len(events_to_update)}",
+            )
+            if not ok:
+                return
+        else:
+            ok = messagebox.askyesno(
+                "Assign All Events",
+                f"Assign '{anim}' ({bmap}) to all events for this game?\n\nEvents: {len(events_to_update)}",
+            )
+            if not ok:
+                return
+        entry = self.game_db.get(self.gm_selected_rom, {})
+        profile = entry.setdefault("profile", {})
+        events = profile.get("events", {})
+        if not isinstance(events, dict):
+            events = {}
+        if clearing:
+            for event in events_to_update:
+                events.pop(event, None)
+            profile["fx_on_start"] = ""
+            profile["fx_on_end"] = ""
+            profile["default_fx"] = ""
+        else:
+            for event in events_to_update:
+                events[event] = {"animation": anim, "button_map": bmap}
+            profile["fx_on_start"] = anim
+            profile["fx_on_end"] = anim
+            profile["default_fx"] = anim
+        if events:
+            profile["events"] = events
+        elif "events" in profile:
+            profile.pop("events", None)
+        entry["profile"] = profile
+        self.game_db[self.gm_selected_rom] = entry
+        self._save_game_db()
+        self._on_gm_select()
+        if "preview_status" in self.gm_fields:
+            if clearing:
+                self.gm_fields["preview_status"].set("Cleared all event assignments.")
+            else:
+                self.gm_fields["preview_status"].set(f"Assigned all events -> {anim} ({bmap})")
     def _gm_assign_event_values(self, event, anim, bmap):
         event = str(event or "").strip()
         anim = str(anim or "").strip()
@@ -6074,7 +6809,11 @@ class ArcadeGUI_V2:
         if not rom_key:
             messagebox.showinfo("Missing ROM Key", "Unable to generate ROM key.")
             return
-        entry = self.game_db.get(rom_key, {})
+        resolved_key = self._resolve_db_key(rom_key)
+        target_key = resolved_key or rom_key
+        entry = self.game_db.get(target_key, {})
+        if not isinstance(entry, dict):
+            entry = {}
         entry.setdefault("profile", {})
         entry["vendor"] = self.gm_fields["vendor"].get().strip()
         entry["profile"]["controller_mode"] = self.gm_fields["controller_mode"].get()
@@ -6112,7 +6851,7 @@ class ArcadeGUI_V2:
                 "rec_platform": base_row.get(self.game_col_map.get("rec_platform", ""), ""),
                 "rank": base_row.get(self.game_col_map.get("rank", ""), ""),
             }
-        self.game_db[rom_key] = entry
+        self.game_db[target_key] = entry
         self._save_game_db()
         try:
             self._upsert_catalog_row({
@@ -6126,12 +6865,12 @@ class ArcadeGUI_V2:
             })
         except Exception as e:
             messagebox.showwarning("Catalog Update Failed", str(e))
-        self.gm_selected_rom = rom_key
-        self.gm_fields["rom_key"].set(rom_key)
+        self.gm_selected_rom = target_key
+        self.gm_fields["rom_key"].set(target_key)
         self._refresh_game_list()
         self._refresh_gm_list()
         # Keep the saved ROM selected in Game Manager so changes remain visible.
-        row = self._find_catalog_row_by_rom(rom_key)
+        row = self._find_catalog_row_by_rom(target_key)
         title_key = self.gm_title_key
         saved_title = row.get(title_key, "") if isinstance(row, dict) and title_key else ""
         if saved_title and hasattr(self, "gm_list"):
@@ -6144,7 +6883,7 @@ class ArcadeGUI_V2:
                     self._on_gm_select()
                     break
         self._refresh_fx_list()
-        messagebox.showinfo("Saved", f"Game '{rom_key}' saved.")
+        messagebox.showinfo("Saved", f"Game '{target_key}' saved.")
     def gm_delete_game(self):
         if not hasattr(self, "gm_fields"):
             return
@@ -6153,15 +6892,16 @@ class ArcadeGUI_V2:
         if not rom_key:
             messagebox.showinfo("Delete Game", "Select a game first.")
             return
-        if rom_key not in self.game_db:
+        resolved_key = self._resolve_db_key(rom_key)
+        if not resolved_key:
             messagebox.showinfo("Delete Game", f"'{title}' was not found in the JSON database.")
             return
         if not messagebox.askyesno(
             "Delete Game",
-            f"Delete '{title}' ({rom_key}) from the game database?\n\nThis cannot be undone.",
+            f"Delete '{title}' ({resolved_key}) from the game database?\n\nThis cannot be undone.",
         ):
             return
-        del self.game_db[rom_key]
+        del self.game_db[resolved_key]
         self._save_game_db()
         # Rebuild shared list caches so deletion is reflected on all tabs.
         self.game_rows, self.game_col_map = self._load_game_catalog()
@@ -6179,7 +6919,7 @@ class ArcadeGUI_V2:
         # Legacy alias: catalog/override data is now unified in one JSON DB.
         self.gm_delete_game()
     def _refresh_fx_list(self, _evt=None):
-        if not hasattr(self, "fx_list"):
+        if not hasattr(self, "fx_list") or not hasattr(self, "fx_search"):
             return
         q = self.fx_search.get().strip().lower()
         self.fx_list.delete(0, tk.END)
@@ -6605,6 +7345,7 @@ class ArcadeGUI_V2:
             "skip_startup_sound": tk.BooleanVar(value=bool(self.app_settings.get("skip_startup_sound", False))),
             "fx_editor_video_enabled": tk.BooleanVar(value=bool(self.app_settings.get("fx_editor_video_enabled", True))),
             "fx_editor_video_audio_enabled": tk.BooleanVar(value=bool(self.app_settings.get("fx_editor_video_audio_enabled", True))),
+            "auto_launch_aclighter": tk.BooleanVar(value=bool(self.app_settings.get("auto_launch_aclighter", True))),
             "effects_enabled": tk.BooleanVar(value=bool(self.app_settings.get("effects_enabled", True))),
             "effects_preset_id": tk.StringVar(value=str(self.app_settings.get("effects_preset_id", "showroom_default"))),
         }
@@ -6634,6 +7375,16 @@ class ArcadeGUI_V2:
             data = {k: v.get() for k, v in self.app_config_vars.items()}
             self.app_settings.update(data)
             self.save_settings(data)
+            if bool(data.get("auto_launch_aclighter", True)):
+                started = self._ensure_aclighter_running_on_startup(wait_seconds=3.0)
+                if started and hasattr(self, "cab") and hasattr(self.cab, "reconnect"):
+                    try:
+                        self.cab.reconnect()
+                    except Exception:
+                        try:
+                            self.cab.reconnect(self.port)
+                        except Exception:
+                            pass
             self.effects_enabled = bool(data.get("effects_enabled", True))
             preset_id = str(data.get("effects_preset_id", "showroom_default"))
             if hasattr(self, "effects_engine") and self.effects_engine:
@@ -6651,6 +7402,12 @@ class ArcadeGUI_V2:
         tk.Checkbutton(
             app_cfg, text="Skip startup WAV",
             variable=self.app_config_vars["skip_startup_sound"],
+            bg=COLORS["CHARCOAL"], fg="white", selectcolor=COLORS["CHARCOAL"],
+            command=_save_app_settings,
+        ).pack(anchor="w", pady=2)
+        tk.Checkbutton(
+            app_cfg, text="Auto-start ACLighter if offline",
+            variable=self.app_config_vars["auto_launch_aclighter"],
             bg=COLORS["CHARCOAL"], fg="white", selectcolor=COLORS["CHARCOAL"],
             command=_save_app_settings,
         ).pack(anchor="w", pady=2)
@@ -6699,6 +7456,82 @@ class ArcadeGUI_V2:
             font=("Segoe UI", 8),
         ).pack(anchor="w", fill="x", pady=(6, 0))
         _refresh_preset_description()
+
+        tk.Frame(app_cfg, bg=COLORS["SURFACE_LIGHT"], height=1).pack(fill="x", pady=(10, 8))
+        startup_box = tk.LabelFrame(
+            app_cfg,
+            text=" ACLIGHTER STARTUP SERVICE ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["P1"],
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=6,
+        )
+        startup_box.pack(fill="x")
+
+        self.aclighter_startup_status_var = tk.StringVar(value="Checking...")
+        self.aclighter_startup_cmd_var = tk.StringVar(value="Checking...")
+
+        tk.Label(
+            startup_box,
+            text="Status:",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.aclighter_startup_status_lbl = tk.Label(
+            startup_box,
+            textvariable=self.aclighter_startup_status_var,
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT"],
+            font=("Segoe UI", 8, "bold"),
+        )
+        self.aclighter_startup_status_lbl.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        tk.Label(
+            startup_box,
+            textvariable=self.aclighter_startup_cmd_var,
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Consolas", 8),
+            wraplength=300,
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 6))
+
+        startup_btns = tk.Frame(startup_box, bg=COLORS["CHARCOAL"])
+        startup_btns.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.aclighter_startup_install_btn = ModernButton(
+            startup_btns,
+            text="INSTALL",
+            bg=COLORS["SUCCESS"],
+            fg="black",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._install_aclighter_startup,
+        )
+        self.aclighter_startup_install_btn.pack(side="left")
+        self.aclighter_startup_remove_btn = ModernButton(
+            startup_btns,
+            text="REMOVE",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._remove_aclighter_startup,
+        )
+        self.aclighter_startup_remove_btn.pack(side="left", padx=6)
+        ModernButton(
+            startup_btns,
+            text="REFRESH",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=10,
+            font=("Segoe UI", 8, "bold"),
+            command=self._refresh_aclighter_startup_status,
+        ).pack(side="left")
+
+        startup_box.columnconfigure(1, weight=1)
+        self._refresh_aclighter_startup_status()
 
         future_wrap = tk.Frame(future_cfg, bg=COLORS["CHARCOAL"])
         future_wrap.pack(fill="both", expand=True)
@@ -6892,6 +7725,7 @@ class ArcadeGUI_V2:
             self.controller_notes.insert("1.0", cfg.get("notes", ""))
         if hasattr(self, "controller_status"):
             self.controller_status.config(text="Reloaded.")
+        self._refresh_aclighter_startup_status()
 
     def _controller_update_summary(self):
         if not hasattr(self, "controller_vars"):
@@ -6936,6 +7770,236 @@ class ArcadeGUI_V2:
             f"Estimated axes: {total_axes}\n"
             f"Estimated dpads: {total_dpads}"
         )
+
+    def _iter_aclighter_launch_candidates(self, include_py=True):
+        candidates = []
+        seen = set()
+        exe_names = ("ACLighter.exe", "aclighter.exe", "ACLighterV2-1.exe", "aclighterv2-1.exe")
+        py_names = ("ACLighter.py", "aclighter.py")
+
+        def _add(path_value):
+            if not path_value:
+                return
+            p = str(path_value).strip().strip('"')
+            if not p:
+                return
+            p = os.path.expandvars(os.path.expanduser(p))
+            p = os.path.normpath(p)
+            if os.path.isdir(p):
+                for exe_name in exe_names:
+                    _add(os.path.join(p, exe_name))
+                if include_py:
+                    for py_name in py_names:
+                        _add(os.path.join(p, py_name))
+                return
+            key = p.lower()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(p)
+
+        settings = self.app_settings if isinstance(self.app_settings, dict) else {}
+        for key in ("aclighter_path", "aclighter_exe", "aclighter_dir"):
+            _add(settings.get(key))
+
+        detected = DetectACLighter(settings)
+        detected_path = detected.get("path") if isinstance(detected, dict) else None
+        if detected_path:
+            _add(detected_path)
+            _add(os.path.dirname(str(detected_path)))
+
+        runtime_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        search_dirs = [
+            runtime_dir,
+            os.path.join(runtime_dir, "tools", "ACLighter"),
+            os.path.dirname(runtime_dir),
+            os.path.dirname(os.path.abspath(__file__)),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "ACLighter"),
+            os.getcwd(),
+        ]
+        for d in search_dirs:
+            _add(d)
+
+        for candidate in candidates:
+            if not os.path.isfile(candidate):
+                continue
+            low = candidate.lower()
+            if low.endswith(".exe"):
+                yield candidate
+            elif include_py and low.endswith(".py"):
+                yield candidate
+
+    def _resolve_aclighter_exe_for_startup(self):
+        for candidate in self._iter_aclighter_launch_candidates(include_py=False):
+            if candidate.lower().endswith(".exe"):
+                return candidate
+        return None
+
+    def _is_aclighter_listener_online(self, timeout=0.25):
+        try:
+            with socket.create_connection(("127.0.0.1", 6006), timeout=timeout):
+                return True
+        except Exception:
+            return False
+
+    def _ensure_aclighter_running_on_startup(self, wait_seconds=4.0):
+        if self._is_aclighter_listener_online(timeout=0.25):
+            return True
+
+        target = None
+        for candidate in self._iter_aclighter_launch_candidates(include_py=True):
+            target = candidate
+            break
+        if not target:
+            return False
+
+        try:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+            low = target.lower()
+            cwd = os.path.dirname(target) or None
+            if low.endswith(".exe"):
+                subprocess.Popen([target], cwd=cwd, creationflags=creationflags)
+            elif low.endswith(".py"):
+                py_exe = sys.executable
+                if os.name == "nt":
+                    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+                    if os.path.isfile(pyw):
+                        py_exe = pyw
+                subprocess.Popen([py_exe, target], cwd=cwd, creationflags=creationflags)
+            else:
+                return False
+        except Exception:
+            return False
+
+        deadline = time.time() + max(0.5, float(wait_seconds))
+        while time.time() < deadline:
+            if self._is_aclighter_listener_online(timeout=0.25):
+                return True
+            time.sleep(0.2)
+        return False
+
+    def _get_aclighter_startup_entry(self):
+        state = {
+            "supported": False,
+            "enabled": False,
+            "command": "",
+            "error": None,
+        }
+        if os.name != "nt":
+            state["error"] = "Windows startup install is only available on Windows."
+            return state
+        if winreg is None:
+            state["error"] = "Windows registry API is unavailable."
+            return state
+
+        state["supported"] = True
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, ACLIGHTER_STARTUP_RUN_KEY, 0, winreg.KEY_READ) as key:
+                value, _ = winreg.QueryValueEx(key, ACLIGHTER_STARTUP_VALUE)
+                if isinstance(value, str):
+                    state["command"] = value
+                    state["enabled"] = bool(value.strip())
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            state["error"] = f"Registry read failed: {exc}"
+        return state
+
+    def _refresh_aclighter_startup_status(self):
+        state = self._get_aclighter_startup_entry()
+        if not hasattr(self, "aclighter_startup_status_var"):
+            return state
+
+        status_lbl = getattr(self, "aclighter_startup_status_lbl", None)
+        install_btn = getattr(self, "aclighter_startup_install_btn", None)
+        remove_btn = getattr(self, "aclighter_startup_remove_btn", None)
+
+        if not state["supported"]:
+            self.aclighter_startup_status_var.set("Unsupported")
+            self.aclighter_startup_cmd_var.set(state["error"] or "")
+            if status_lbl is not None:
+                status_lbl.configure(fg=COLORS["TEXT_DIM"])
+            if install_btn is not None:
+                install_btn.configure(state="disabled")
+            if remove_btn is not None:
+                remove_btn.configure(state="disabled")
+            return state
+
+        if install_btn is not None:
+            install_btn.configure(state="normal")
+        if remove_btn is not None:
+            remove_btn.configure(state="normal")
+
+        if state.get("error"):
+            self.aclighter_startup_status_var.set("Error")
+            self.aclighter_startup_cmd_var.set(state["error"])
+            if status_lbl is not None:
+                status_lbl.configure(fg=COLORS["SYS"])
+            return state
+
+        if state["enabled"]:
+            self.aclighter_startup_status_var.set("Installed")
+            self.aclighter_startup_cmd_var.set(state["command"])
+            if status_lbl is not None:
+                status_lbl.configure(fg=COLORS["SUCCESS"])
+        else:
+            self.aclighter_startup_status_var.set("Not Installed")
+            resolved = self._resolve_aclighter_exe_for_startup()
+            if resolved:
+                self.aclighter_startup_cmd_var.set(f'Ready target: "{resolved}"')
+            else:
+                self.aclighter_startup_cmd_var.set("ACLighter.exe not found in known paths.")
+            if status_lbl is not None:
+                status_lbl.configure(fg=COLORS["TEXT"])
+        return state
+
+    def _install_aclighter_startup(self):
+        state = self._get_aclighter_startup_entry()
+        if not state["supported"]:
+            messagebox.showerror("Startup Install", state["error"] or "Unsupported platform.")
+            return
+
+        aclighter_exe = self._resolve_aclighter_exe_for_startup()
+        if not aclighter_exe:
+            messagebox.showerror(
+                "Startup Install",
+                "ACLighter.exe was not found.\n\nPlace ACLighter.exe beside Arcade Commander or configure aclighter_path in app settings."
+            )
+            self._refresh_aclighter_startup_status()
+            return
+
+        command = f'"{aclighter_exe}"'
+        try:
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, ACLIGHTER_STARTUP_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, ACLIGHTER_STARTUP_VALUE, 0, winreg.REG_SZ, command)
+            self._refresh_aclighter_startup_status()
+            if hasattr(self, "controller_status"):
+                self.controller_status.config(text="ACLighter startup service installed.")
+            messagebox.showinfo("Startup Install", "ACLighter will now start when you log in.")
+        except OSError as exc:
+            messagebox.showerror("Startup Install", f"Failed to install startup entry:\n{exc}")
+            self._refresh_aclighter_startup_status()
+
+    def _remove_aclighter_startup(self):
+        state = self._get_aclighter_startup_entry()
+        if not state["supported"]:
+            messagebox.showerror("Startup Install", state["error"] or "Unsupported platform.")
+            return
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, ACLIGHTER_STARTUP_RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, ACLIGHTER_STARTUP_VALUE)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            messagebox.showerror("Startup Install", f"Failed to remove startup entry:\n{exc}")
+            self._refresh_aclighter_startup_status()
+            return
+
+        self._refresh_aclighter_startup_status()
+        if hasattr(self, "controller_status"):
+            self.controller_status.config(text="ACLighter startup service removed.")
+        messagebox.showinfo("Startup Install", "ACLighter startup entry removed.")
+
     def _build_fx_editor_ui(self, parent):
         body = tk.Frame(parent, bg=COLORS["BG"])
         body.pack(fill="both", expand=True, padx=16, pady=(8, 10))
@@ -6949,50 +8013,58 @@ class ArcadeGUI_V2:
         controls.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         assign = tk.LabelFrame(body, text=" ASSIGNMENTS ", bg=COLORS["CHARCOAL"], fg=COLORS["SUCCESS"], font=("Segoe UI", 9, "bold"), padx=10, pady=8)
         assign.grid(row=0, column=1, sticky="nsew")
+        composer_box = tk.LabelFrame(assign, text=" ANIMATION WORKSTATION ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
+                                     font=("Segoe UI", 8, "bold"), padx=6, pady=6)
+        composer_box.pack(fill="both", expand=True)
 
         # Modulation content is intentionally non-scrollable per UI request.
 
-        # FX Library + Game Library (moved into Assignments)
-        libs = tk.Frame(assign, bg=COLORS["CHARCOAL"])
-        libs.pack(fill="x")
-        lib_box = tk.LabelFrame(libs, text=" LIBRARY ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
-                                font=("Segoe UI", 8, "bold"), padx=6, pady=6)
+        # Unified library + composer panel.
+        libs = tk.Frame(composer_box, bg=COLORS["CHARCOAL"])
+        libs.pack(fill="both", expand=True)
+        lib_box = tk.Frame(libs, bg=COLORS["CHARCOAL"])
         lib_box.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        tk.Label(lib_box, text="LIBRARY", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 4))
         lib_notebook = ttk.Notebook(lib_box)
         lib_notebook.pack(fill="both", expand=True)
         fx_box = tk.Frame(lib_notebook, bg=COLORS["CHARCOAL"])
         anim_tab = tk.Frame(lib_notebook, bg=COLORS["CHARCOAL"])
-        lib_notebook.add(fx_box, text="Effects")
-        lib_notebook.add(anim_tab, text="Animations")
+        catalog_tab = tk.Frame(lib_notebook, bg=COLORS["CHARCOAL"])
+        lib_notebook.add(fx_box, text="Asset Manager")
+        lib_notebook.add(anim_tab, text="Composer")
+        # Catalog tab intentionally hidden; Composer + Asset Manager are the active workflow.
         self.fx_editor_state["lib_search_var"] = tk.StringVar(value="")
         self.fx_editor_state["lib_filter_var"] = tk.StringVar(value="all")
         sb_search = tk.Frame(fx_box, bg=COLORS["CHARCOAL"])
         sb_search.pack(fill="x", pady=(0, 6))
-        tk.Entry(sb_search, textvariable=self.fx_editor_state["lib_search_var"], bg=COLORS["SURFACE_LIGHT"], fg="white",
-                 borderwidth=0, font=("Consolas", 9)).pack(side="left", fill="x", expand=True)
+        fx_ws_search = tk.Entry(sb_search, textvariable=self.fx_editor_state["lib_search_var"], bg=COLORS["SEARCH_BG"], fg="white",
+                                borderwidth=0, font=("Consolas", 9), highlightthickness=1,
+                                highlightbackground=COLORS["SEARCH_BORDER"], highlightcolor=COLORS["P1"], relief="flat")
+        fx_ws_search.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(fx_ws_search)
         ttk.Combobox(
             sb_search,
             textvariable=self.fx_editor_state["lib_filter_var"],
-            values=("all", "audio", "presets"),
+            values=("all", "effects", "animations", "button_maps", "audio", "presets"),
             state="readonly",
-            width=10,
+            width=12,
             font=("Consolas", 8),
         ).pack(side="right", padx=(6, 0))
         ModernButton(sb_search, text="REFRESH", bg=COLORS["SURFACE_LIGHT"], fg="white", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_library_refresh).pack(side="right", padx=(6, 0))
+                     font=("Segoe UI", 8, "bold"), command=self._fx_assets_refresh).pack(side="right", padx=(6, 0))
 
         lib_actions = tk.Frame(fx_box, bg=COLORS["CHARCOAL"])
         lib_actions.pack(fill="x", pady=(0, 6))
         ModernButton(lib_actions, text="IMPORT", bg=COLORS["SURFACE_LIGHT"], fg="white", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_library_import).pack(side="left", padx=(0, 6))
+                     font=("Segoe UI", 8, "bold"), command=self._fx_assets_import).pack(side="left", padx=(0, 6))
         ModernButton(lib_actions, text="EXPORT", bg=COLORS["SURFACE_LIGHT"], fg="white", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_library_export).pack(side="left", padx=(0, 6))
+                     font=("Segoe UI", 8, "bold"), command=self._fx_assets_export_selected).pack(side="left", padx=(0, 6))
         ModernButton(lib_actions, text="DELETE", bg=COLORS["DANGER"], fg="white", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_library_delete).pack(side="left")
+                     font=("Segoe UI", 8, "bold"), command=self._fx_assets_delete_selected).pack(side="left")
 
-        sb_list_wrap = tk.Frame(fx_box, bg=COLORS["CHARCOAL"], height=120)
-        sb_list_wrap.pack(fill="x", pady=(0, 2))
-        sb_list_wrap.pack_propagate(False)
+        sb_list_wrap = tk.Frame(fx_box, bg=COLORS["CHARCOAL"])
+        sb_list_wrap.pack(fill="both", expand=True, pady=(0, 2))
         self.fx_editor_state["lib_list"] = tk.Listbox(
             sb_list_wrap, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, highlightthickness=0,
             selectbackground=COLORS["P1"], selectforeground="black", font=("Segoe UI", 9), height=5
@@ -7002,14 +8074,11 @@ class ArcadeGUI_V2:
         self._style_scrollbar(sb_vsb)
         sb_vsb.pack(side="right", fill="y")
         self.fx_editor_state["lib_list"].configure(yscrollcommand=sb_vsb.set)
-        self.fx_editor_state["lib_list"].bind("<<ListboxSelect>>", self._fx_library_select)
-        self.fx_editor_state["lib_list"].bind("<Double-Button-1>", self._fx_editor_load_selected_fx)
-        self.fx_editor_state["lib_list"].bind("<Button-3>", self._fx_library_context_menu)
-        self.fx_editor_state["lib_list"].bind("<Button-1>", self._fx_library_start_drag)
-        self.fx_editor_state["lib_list"].bind("<B1-Motion>", self._fx_library_drag_motion)
-        self.fx_editor_state["lib_list"].bind("<ButtonRelease-1>", self._fx_library_drop)
-        self.fx_editor_state["lib_search_var"].trace_add("write", lambda *_: self._fx_library_refresh())
-        self.fx_editor_state["lib_filter_var"].trace_add("write", lambda *_: self._fx_library_refresh())
+        self.fx_editor_state["lib_list"].bind("<<ListboxSelect>>", self._fx_assets_select)
+        self.fx_editor_state["lib_list"].bind("<Double-Button-1>", lambda _e: self._fx_assets_load_selected())
+        self.fx_editor_state["lib_list"].bind("<Return>", lambda _e: self._fx_assets_load_selected())
+        self.fx_editor_state["lib_search_var"].trace_add("write", lambda *_: self._fx_assets_refresh())
+        self.fx_editor_state["lib_filter_var"].trace_add("write", lambda *_: self._fx_assets_refresh())
 
         sb_actions = tk.Frame(fx_box, bg=COLORS["CHARCOAL"])
         sb_actions.pack(fill="x", pady=(6, 0))
@@ -7020,7 +8089,7 @@ class ArcadeGUI_V2:
             fg="black",
             width=8,
             font=("Segoe UI", 8, "bold"),
-            command=self._fx_editor_load_selected_fx,
+            command=self._fx_assets_load_selected,
         ).pack(side="left")
         ModernButton(
             sb_actions,
@@ -7029,64 +8098,490 @@ class ArcadeGUI_V2:
             fg="black",
             width=8,
             font=("Segoe UI", 8, "bold"),
-            command=self._fx_editor_preview_selected_fx,
+            command=self._fx_assets_preview_selected,
+        ).pack(side="left", padx=(6, 0))
+        ModernButton(
+            sb_actions,
+            text="STOP",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_stop_preview,
         ).pack(side="left", padx=(6, 0))
 
-        game_box = tk.LabelFrame(assign, text=" GAME LIBRARY ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
-                                 font=("Segoe UI", 8, "bold"), padx=6, pady=6)
-        game_box.pack(side="bottom", fill="x", pady=(8, 0))
-        self.fx_search = tk.Entry(game_box, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, font=("Consolas", 9))
-        self.fx_search.pack(fill="x", pady=(0, 6))
-        self.fx_search.bind("<KeyRelease>", self._refresh_fx_list)
-        game_list_wrap = tk.Frame(game_box, bg=COLORS["CHARCOAL"], height=120)
-        game_list_wrap.pack(fill="x")
-        game_list_wrap.pack_propagate(False)
-        self.fx_list = tk.Listbox(game_list_wrap, bg=COLORS["SURFACE_LIGHT"], fg="white", borderwidth=0, highlightthickness=0,
-                                  selectbackground=COLORS["P1"], selectforeground="black", font=("Segoe UI", 9), height=5)
-        self.fx_list.pack(side="left", fill="x", expand=True)
-        game_vsb = ttk.Scrollbar(game_list_wrap, orient="vertical", style="AC.Vertical.TScrollbar", command=self.fx_list.yview)
-        self._style_scrollbar(game_vsb)
-        game_vsb.pack(side="right", fill="y")
-        self.fx_list.configure(yscrollcommand=game_vsb.set)
-        self.fx_list.bind("<<ListboxSelect>>", self._on_fx_select)
+        if "anim_name_var" not in self.fx_editor_state:
+            self.fx_editor_state["anim_name_var"] = tk.StringVar(value="")
+        if "event_type_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_type_var"] = tk.StringVar(value="GAME_START")
+        if "event_anim_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_anim_var"] = tk.StringVar(value="RAINBOW")
+        if "event_dur_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_dur_var"] = tk.DoubleVar(value=3.0)
+        if "composer_status_var" not in self.fx_editor_state:
+            self.fx_editor_state["composer_status_var"] = tk.StringVar(value="Build animation steps and save.")
+        if "profile_source_var" not in self.fx_editor_state:
+            self.fx_editor_state["profile_source_var"] = tk.StringVar(value="Map")
+        if "profile_value_var" not in self.fx_editor_state:
+            self.fx_editor_state["profile_value_var"] = tk.StringVar(value="")
 
-        game_btns = tk.Frame(game_box, bg=COLORS["CHARCOAL"])
-        game_btns.pack(fill="x", pady=(6, 0))
-        ModernButton(game_btns, text="APPLY FX", bg=COLORS["SYS"], fg="black", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self.fx_apply_to_game).pack(side="left", padx=(0, 6))
-        ModernButton(game_btns, text="LOAD FX", bg=COLORS["SURFACE_LIGHT"], fg="white", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self.fx_load_from_game).pack(side="left")
+        composer_tab_body = tk.Frame(anim_tab, bg=COLORS["CHARCOAL"])
+        composer_tab_body.pack(fill="both", expand=True, padx=6, pady=6)
 
-        assign_game = tk.Frame(game_box, bg=COLORS["CHARCOAL"])
-        assign_game.pack(fill="x", pady=(8, 0))
-        tk.Label(assign_game, text="FX Start:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Combobox(
-            assign_game,
-            textvariable=self.fx_on_start_var,
-            values=("NONE",) + self._get_shared_effect_options(),
-            state="readonly",
-            font=("Consolas", 8),
-            width=14,
-        ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        tk.Label(assign_game, text="FX End:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).grid(row=1, column=0, sticky="w", pady=(6, 0))
-        ttk.Combobox(
-            assign_game,
-            textvariable=self.fx_on_end_var,
-            values=("NONE",) + self._get_shared_effect_options(),
-            state="readonly",
-            font=("Consolas", 8),
-            width=14,
-        ).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
-        assign_game.columnconfigure(1, weight=1)
-        ModernButton(
-            assign_game,
-            text="SAVE START/END",
+        name_row = tk.Frame(composer_tab_body, bg=COLORS["CHARCOAL"])
+        name_row.pack(fill="x", pady=(2, 4))
+        tk.Label(name_row, text="Animation", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        tk.Entry(
+            name_row,
+            textvariable=self.fx_editor_state["anim_name_var"],
             bg=COLORS["SURFACE_LIGHT"],
             fg="white",
-            width=14,
+            borderwidth=0,
+            font=("Consolas", 8),
+        ).pack(side="left", fill="x", expand=True, padx=(6, 6))
+        ModernButton(
+            name_row,
+            text="NEW",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=8,
             font=("Segoe UI", 8, "bold"),
-            command=self.fx_save_start_end,
-        ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+            command=self._fx_editor_new_animation_draft,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            name_row,
+            text="SAVE",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_save_animation,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            name_row,
+            text="DELETE",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_delete_animation,
+        ).pack(side="left")
+
+        lists_row = tk.Frame(composer_tab_body, bg=COLORS["CHARCOAL"])
+        lists_row.pack(fill="x", expand=False, pady=(0, 4))
+        lists_row.rowconfigure(0, weight=0)
+        lists_row.columnconfigure(0, weight=1, uniform="composer_cols")
+        lists_row.columnconfigure(1, weight=3, uniform="composer_cols")
+
+        anim_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
+        anim_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        tk.Label(anim_col, text="Animations", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        anim_list_wrap = tk.Frame(anim_col, bg=COLORS["CHARCOAL"], height=70)
+        anim_list_wrap.pack(fill="x", expand=False, pady=(3, 6))
+        anim_list_wrap.pack_propagate(False)
+        self.fx_editor_state["composer_anim_list"] = tk.Listbox(
+            anim_list_wrap,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            borderwidth=0,
+            highlightthickness=0,
+            selectbackground=COLORS["P1"],
+            selectforeground="black",
+            font=("Segoe UI", 8),
+            height=6,
+        )
+        self.fx_editor_state["composer_anim_list"].pack(side="left", fill="both", expand=True)
+        composer_anim_vsb = ttk.Scrollbar(
+            anim_list_wrap,
+            orient="vertical",
+            style="AC.Vertical.TScrollbar",
+            command=self.fx_editor_state["composer_anim_list"].yview,
+        )
+        self._style_scrollbar(composer_anim_vsb)
+        composer_anim_vsb.pack(side="right", fill="y")
+        self.fx_editor_state["composer_anim_list"].configure(yscrollcommand=composer_anim_vsb.set)
+        self.fx_editor_state["composer_anim_list"].bind("<<ListboxSelect>>", self._fx_editor_composer_anim_select)
+
+        step_col = tk.Frame(lists_row, bg=COLORS["CHARCOAL"])
+        step_col.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        top_controls = tk.Frame(step_col, bg=COLORS["CHARCOAL"])
+        top_controls.pack(fill="x")
+        tk.Label(top_controls, text="Event", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        ttk.Combobox(
+            top_controls,
+            textvariable=self.fx_editor_state["event_type_var"],
+            values=(
+                "FE_START",
+                "FE_QUIT",
+                "SCREENSAVER_START",
+                "SCREENSAVER_STOP",
+                "LIST_CHANGE",
+                "GAME_START",
+                "GAME_QUIT",
+                "GAME_PAUSE",
+                "AUDIO_ANIMATION",
+                "SPEAK_CONTROLS",
+                "DEFAULT",
+            ),
+            state="readonly",
+            width=12,
+            font=("Consolas", 8),
+        ).pack(side="left", padx=(6, 6))
+        if "asset_selected_var" not in self.fx_editor_state:
+            self.fx_editor_state["asset_selected_var"] = tk.StringVar(value="")
+        tk.Label(top_controls, text="Asset", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        tk.Entry(
+            top_controls,
+            textvariable=self.fx_editor_state["asset_selected_var"],
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            borderwidth=0,
+            font=("Consolas", 8),
+            state="readonly",
+            width=18,
+        ).pack(side="left", padx=(6, 6), fill="x", expand=True)
+        tk.Label(top_controls, text="Dur", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        tk.Entry(
+            top_controls,
+            textvariable=self.fx_editor_state["event_dur_var"],
+            width=6,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            font=("Consolas", 8),
+            borderwidth=0,
+        ).pack(side="left", padx=(4, 0))
+
+        step_list_wrap = tk.Frame(step_col, bg=COLORS["CHARCOAL"], height=64)
+        step_list_wrap.pack(fill="x", pady=(4, 0))
+        step_list_wrap.pack_propagate(False)
+        self.fx_editor_state["composer_step_list"] = tk.Listbox(
+            step_list_wrap,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            borderwidth=0,
+            highlightthickness=0,
+            selectbackground=COLORS["P1"],
+            selectforeground="black",
+            font=("Consolas", 8),
+            height=7,
+        )
+        self.fx_editor_state["composer_step_list"].pack(side="left", fill="both", expand=True)
+        composer_step_vsb = ttk.Scrollbar(
+            step_list_wrap,
+            orient="vertical",
+            style="AC.Vertical.TScrollbar",
+            command=self.fx_editor_state["composer_step_list"].yview,
+        )
+        self._style_scrollbar(composer_step_vsb)
+        composer_step_vsb.pack(side="right", fill="y")
+        self.fx_editor_state["composer_step_list"].configure(yscrollcommand=composer_step_vsb.set)
+        self.fx_editor_state["composer_step_list"].bind("<<ListboxSelect>>", self._fx_editor_composer_step_select)
+
+        asset_tools = tk.Frame(step_col, bg=COLORS["CHARCOAL"])
+        asset_tools.pack(fill="x", pady=(6, 0))
+        if "asset_search_var" not in self.fx_editor_state:
+            self.fx_editor_state["asset_search_var"] = tk.StringVar(value="")
+        if "asset_filter_var" not in self.fx_editor_state:
+            self.fx_editor_state["asset_filter_var"] = tk.StringVar(value="all")
+        asset_search_entry = tk.Entry(
+            asset_tools,
+            textvariable=self.fx_editor_state["asset_search_var"],
+            bg=COLORS["SEARCH_BG"],
+            fg="white",
+            borderwidth=0,
+            font=("Consolas", 8),
+            highlightthickness=1,
+            highlightbackground=COLORS["SEARCH_BORDER"],
+            highlightcolor=COLORS["P1"],
+            relief="flat",
+        )
+        asset_search_entry.pack(side="left", fill="x", expand=True)
+        self._style_search_entry(asset_search_entry)
+        ttk.Combobox(
+            asset_tools,
+            textvariable=self.fx_editor_state["asset_filter_var"],
+            values=("all", "animations", "effects"),
+            state="readonly",
+            width=11,
+            font=("Consolas", 8),
+        ).pack(side="left", padx=(6, 0))
+
+        asset_wrap = tk.Frame(step_col, bg=COLORS["CHARCOAL"], height=66)
+        asset_wrap.pack(fill="x", expand=False, pady=(4, 0))
+        asset_wrap.pack_propagate(False)
+        self.fx_editor_state["asset_list"] = tk.Listbox(
+            asset_wrap,
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            highlightthickness=0,
+            borderwidth=0,
+            selectbackground=COLORS["P1"],
+            selectforeground="black",
+            font=("Segoe UI", 8),
+            height=4,
+        )
+        self.fx_editor_state["asset_list"].pack(side="left", fill="both", expand=True)
+        asset_vsb = ttk.Scrollbar(
+            asset_wrap,
+            orient="vertical",
+            style="AC.Vertical.TScrollbar",
+            command=self.fx_editor_state["asset_list"].yview,
+        )
+        self._style_scrollbar(asset_vsb)
+        asset_vsb.pack(side="right", fill="y")
+        self.fx_editor_state["asset_list"].configure(yscrollcommand=asset_vsb.set)
+        self.fx_editor_state["asset_list"].bind("<<ListboxSelect>>", self._fx_editor_composer_asset_select)
+        self.fx_editor_state["asset_list"].bind("<Double-Button-1>", lambda _e: self._fx_editor_composer_preview_selected_asset())
+        self.fx_editor_state["asset_list"].bind("<Return>", lambda _e: self._fx_editor_composer_add_selected_asset())
+
+        composer_actions = tk.Frame(composer_tab_body, bg=COLORS["CHARCOAL"])
+        composer_actions.pack(fill="x", pady=(4, 0))
+
+        asset_btns = tk.Frame(composer_actions, bg=COLORS["CHARCOAL"])
+        asset_btns.pack(fill="x", pady=(0, 4))
+        ModernButton(
+            asset_btns,
+            text="PREVIEW",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_composer_preview_selected_asset,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            asset_btns,
+            text="STOP",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=7,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_stop_preview,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            asset_btns,
+            text="ADD",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=6,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_composer_add_selected_asset,
+        ).pack(side="left")
+
+        step_btns = tk.Frame(composer_actions, bg=COLORS["CHARCOAL"])
+        step_btns.pack(fill="x", pady=(0, 0))
+        ModernButton(
+            step_btns,
+            text="ADD/UPDATE",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=11,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_add_or_update_animation_step,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            step_btns,
+            text="REMOVE",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_remove_animation_step,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            step_btns,
+            text="UP",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=6,
+            font=("Segoe UI", 8, "bold"),
+            command=lambda: self._fx_editor_move_animation_step(-1),
+        ).pack(side="left", padx=(0, 4))
+        ModernButton(
+            step_btns,
+            text="DOWN",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=6,
+            font=("Segoe UI", 8, "bold"),
+            command=lambda: self._fx_editor_move_animation_step(1),
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            step_btns,
+            text="TRIGGER",
+            bg=COLORS["P1"],
+            fg="black",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_trigger_event_preview,
+        ).pack(side="left")
+        ModernButton(
+            step_btns,
+            text="STOP",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_stop_preview,
+        ).pack(side="left", padx=(6, 0))
+
+        buttons_wrap = tk.LabelFrame(
+            composer_tab_body,
+            text=" BUTTON WORKBENCH ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=6,
+        )
+        buttons_wrap.pack(fill="x", pady=(6, 0))
+
+        map_box = tk.LabelFrame(
+            buttons_wrap,
+            text=" BUTTON MAP LOADER ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+            padx=6,
+            pady=6,
+        )
+        map_box.pack(fill="x", expand=False, padx=6, pady=(0, 6))
+        map_row = tk.Frame(map_box, bg=COLORS["CHARCOAL"])
+        map_row.pack(fill="x")
+        ttk.Combobox(
+            map_row,
+            textvariable=self.fx_editor_state["profile_source_var"],
+            values=("Map", "Current Deck"),
+            state="readonly",
+            width=10,
+            font=("Consolas", 8),
+        ).pack(side="left")
+        self.fx_editor_state["composer_profile_value_combo"] = ttk.Combobox(
+            map_row,
+            textvariable=self.fx_editor_state["profile_value_var"],
+            values=(),
+            state="readonly",
+            font=("Consolas", 8),
+            width=20,
+        )
+        self.fx_editor_state["composer_profile_value_combo"].pack(side="left", fill="x", expand=True, padx=(6, 0))
+        map_btn_row = tk.Frame(map_box, bg=COLORS["CHARCOAL"])
+        map_btn_row.pack(fill="x", pady=(6, 0))
+        ModernButton(
+            map_btn_row,
+            text="REFRESH",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_refresh_profile_choices,
+        ).pack(side="left", padx=(0, 6))
+        ModernButton(
+            map_btn_row,
+            text="LOAD MAP",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_load_profile_to_editor,
+        ).pack(side="left")
+
+        assign_box = tk.LabelFrame(
+            buttons_wrap,
+            text=" BUTTON ASSIGNMENTS ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=6,
+        )
+        assign_box.pack(fill="x", expand=False, padx=6, pady=(0, 0))
+
+        assign_top = tk.Frame(assign_box, bg=COLORS["CHARCOAL"])
+        assign_top.pack(fill="x")
+        tk.Label(assign_top, text="Assign To:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
+        self.fx_editor_state["assign_var"] = tk.StringVar(value="Full Range")
+        ttk.Combobox(
+            assign_top,
+            textvariable=self.fx_editor_state["assign_var"],
+            values=("Bass", "Mid", "Treble", "Sine", "Full Range"),
+            state="readonly",
+            font=("Consolas", 8),
+            width=10,
+        ).pack(side="left", padx=6)
+        tk.Label(assign_top, text="Group:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
+        self.fx_editor_state["assign_group_var"] = tk.StringVar(value="All")
+        ttk.Combobox(
+            assign_top,
+            textvariable=self.fx_editor_state["assign_group_var"],
+            values=("Selected", "Player 1", "Player 2", "Admin", "All"),
+            state="readonly",
+            font=("Consolas", 8),
+            width=10,
+        ).pack(side="left")
+        ModernButton(assign_top, text="ASSIGN", bg=COLORS["SYS"], fg="black", width=8,
+                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_assign).pack(side="left", padx=6)
+        ModernButton(assign_top, text="PREVIEW", bg=COLORS["P1"], fg="black", width=8,
+                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_assign_preview).pack(side="left")
+        ModernButton(assign_top, text="STOP", bg=COLORS["DANGER"], fg="white", width=8,
+                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_stop_preview).pack(side="left", padx=(6, 0))
+        tk.Label(
+            assign_top,
+            text="Button colors are set on Commander Tab",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["SYS"],
+            font=("Segoe UI", 8, "bold"),
+        ).pack(side="left", padx=(8, 0))
+
+        grid = tk.Frame(assign_box, bg=COLORS["CHARCOAL"])
+        grid.pack(fill="x", expand=False, pady=8)
+        self.fx_editor_state["grid_buttons"] = {}
+        keys = []
+        if hasattr(self, "cab"):
+            raw_keys = list(self.cab.LEDS.keys())
+            p1_order = ["P1_A", "P1_B", "P1_C", "P1_X", "P1_Y", "P1_Z", "P1_START"]
+            p2_order = ["P2_A", "P2_B", "P2_C", "P2_X", "P2_Y", "P2_Z", "P2_START"]
+            sys_order = ["MENU", "REWIND", "TRACKBALL"]
+            ordered = [k for k in (p1_order + p2_order + sys_order) if k in raw_keys]
+            remaining = [k for k in raw_keys if k not in ordered]
+            keys = ordered + remaining
+        for i, key in enumerate(keys):
+            r, c = divmod(i, 7)
+            label = key.replace("P1_", "").replace("P2_", "")
+            btn = MultiColorButton(grid, text=label, width=8, height=1, bg=COLORS["SURFACE_LIGHT"])
+            if key in self.led_state:
+                self._ensure_color_slots(key)
+                cols = [self._rgb_to_hex(*c) for c in self.led_state[key]['colors']]
+                btn.set_colors(cols)
+            btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
+            btn.bind("<Button-1>", lambda e, k=key: self._fx_editor_toggle_button(k))
+            btn.bind("<Button-3>", lambda e, k=key: self.show_context_menu(e, k))
+            btn.canvas.bind("<Button-1>", lambda e, k=key: self._fx_editor_toggle_button(k))
+            btn.canvas.bind("<Button-3>", lambda e, k=key: self.show_context_menu(e, k))
+            self.fx_editor_state["grid_buttons"][key] = btn
+        for c in range(7):
+            grid.columnconfigure(c, weight=1)
+
+        tk.Label(
+            composer_tab_body,
+            textvariable=self.fx_editor_state["composer_status_var"],
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["SYS"],
+            font=("Segoe UI", 8),
+            anchor="w",
+        ).pack(fill="x", pady=(4, 0))
+
+        if not self.fx_editor_state.get("composer_event_trace_attached"):
+            self.fx_editor_state["event_type_var"].trace_add("write", lambda *_: self._fx_editor_refresh_animation_steps())
+            self.fx_editor_state["composer_event_trace_attached"] = True
+        if not self.fx_editor_state.get("composer_asset_trace_attached"):
+            self.fx_editor_state["asset_search_var"].trace_add("write", lambda *_: self._fx_editor_refresh_asset_cards())
+            self.fx_editor_state["asset_filter_var"].trace_add("write", lambda *_: self._fx_editor_refresh_asset_cards())
+            self.fx_editor_state["composer_asset_trace_attached"] = True
+        self._fx_editor_refresh_asset_cards()
+        try:
+            lib_notebook.select(anim_tab)
+        except Exception:
+            pass
 
         # Timeline canvas + scrubber (compact)
         tl_canvas = tk.Canvas(controls, bg=COLORS["SURFACE"], highlightthickness=0, height=54)
@@ -7116,6 +8611,8 @@ class ArcadeGUI_V2:
         ).pack(side="left")
         ModernButton(tl_controls_row1, text="PREVIEW", bg=COLORS["P1"], fg="black", width=10,
                      font=("Segoe UI", 8, "bold"), command=self._fx_editor_preview_button).pack(side="left", padx=6)
+        ModernButton(tl_controls_row1, text="STOP", bg=COLORS["DANGER"], fg="white", width=10,
+                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_stop_preview).pack(side="left", padx=(0, 6))
         ModernButton(tl_controls_row1, text="ALL OFF", bg=COLORS["DANGER"], fg="white", width=10,
                      font=("Segoe UI", 8, "bold"), command=self._fx_editor_all_off).pack(side="left")
         ModernButton(tl_controls_row1, text="GLOBAL OFF", bg=COLORS["DANGER"], fg="white", width=11,
@@ -7415,69 +8912,78 @@ class ArcadeGUI_V2:
         # QUICK FX controls were removed from FX Editor.
         # Quick templates now live in FX Library (RAINBOW/BREATH/STROBE/FADE).
 
-        # Assignment grid
-        assign_top = tk.Frame(assign, bg=COLORS["CHARCOAL"])
-        assign_top.pack(fill="x")
-        tk.Label(assign_top, text="Assign To:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
-        self.fx_editor_state["assign_var"] = tk.StringVar(value="Full Range")
-        ttk.Combobox(
-            assign_top,
-            textvariable=self.fx_editor_state["assign_var"],
-            values=("Bass", "Mid", "Treble", "Sine", "Full Range"),
-            state="readonly",
-            font=("Consolas", 8),
-            width=10,
-        ).pack(side="left", padx=6)
-        tk.Label(assign_top, text="Group:", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
-        self.fx_editor_state["assign_group_var"] = tk.StringVar(value="All")
-        ttk.Combobox(
-            assign_top,
-            textvariable=self.fx_editor_state["assign_group_var"],
-            values=("Selected", "Player 1", "Player 2", "Admin", "All"),
-            state="readonly",
-            font=("Consolas", 8),
-            width=10,
-        ).pack(side="left")
-        ModernButton(assign_top, text="ASSIGN", bg=COLORS["SYS"], fg="black", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_assign).pack(side="left", padx=6)
-        ModernButton(assign_top, text="PREVIEW", bg=COLORS["P1"], fg="black", width=8,
-                     font=("Segoe UI", 8, "bold"), command=self._fx_editor_assign_preview).pack(side="left")
-        tk.Label(
-            assign_top,
-            text="Button colors are set on Commander Tab",
+        # Buttons workflow moved into Asset Manager tab.
+        buttons_wrap = tk.LabelFrame(
+            fx_box,
+            text=" BUTTON WORKBENCH ",
             bg=COLORS["CHARCOAL"],
-            fg=COLORS["SYS"],
+            fg=COLORS["TEXT_DIM"],
             font=("Segoe UI", 8, "bold"),
-        ).pack(side="left", padx=(8, 0))
+            padx=6,
+            pady=6,
+        )
+        buttons_wrap.pack(fill="both", expand=True, pady=(8, 2))
 
-        grid = tk.Frame(assign, bg=COLORS["CHARCOAL"])
-        grid.pack(fill="x", expand=False, pady=8)
-        self.fx_editor_state["grid_buttons"] = {}
-        keys = []
-        if hasattr(self, "cab"):
-            raw_keys = list(self.cab.LEDS.keys())
-            p1_order = ["P1_A", "P1_B", "P1_C", "P1_X", "P1_Y", "P1_Z", "P1_START"]
-            p2_order = ["P2_A", "P2_B", "P2_C", "P2_X", "P2_Y", "P2_Z", "P2_START"]
-            sys_order = ["MENU", "REWIND", "TRACKBALL"]
-            ordered = [k for k in (p1_order + p2_order + sys_order) if k in raw_keys]
-            remaining = [k for k in raw_keys if k not in ordered]
-            keys = ordered + remaining
-        for i, key in enumerate(keys):
-            r, c = divmod(i, 6)
-            label = key.replace("P1_", "").replace("P2_", "")
-            btn = MultiColorButton(grid, text=label, width=8, height=1, bg=COLORS["SURFACE_LIGHT"])
-            if key in self.led_state:
-                self._ensure_color_slots(key)
-                cols = [self._rgb_to_hex(*c) for c in self.led_state[key]['colors']]
-                btn.set_colors(cols)
-            btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
-            btn.bind("<Button-1>", lambda e, k=key: self._fx_editor_toggle_button(k))
-            btn.bind("<Button-3>", lambda e, k=key: self.show_context_menu(e, k))
-            btn.canvas.bind("<Button-1>", lambda e, k=key: self._fx_editor_toggle_button(k))
-            btn.canvas.bind("<Button-3>", lambda e, k=key: self.show_context_menu(e, k))
-            self.fx_editor_state["grid_buttons"][key] = btn
-        for c in range(6):
-            grid.columnconfigure(c, weight=1)
+        if "profile_source_var" not in self.fx_editor_state:
+            self.fx_editor_state["profile_source_var"] = tk.StringVar(value="Map")
+        if "profile_value_var" not in self.fx_editor_state:
+            self.fx_editor_state["profile_value_var"] = tk.StringVar(value="")
+
+        profile_box = tk.LabelFrame(
+            buttons_wrap,
+            text=" BUTTON MAP LOADER ",
+            bg=COLORS["CHARCOAL"],
+            fg=COLORS["TEXT_DIM"],
+            font=("Segoe UI", 8, "bold"),
+            padx=8,
+            pady=6,
+        )
+        profile_box.pack(fill="x", padx=6, pady=(0, 6))
+        src_row = tk.Frame(profile_box, bg=COLORS["CHARCOAL"])
+        src_row.pack(fill="x")
+        ttk.Combobox(
+            src_row,
+            textvariable=self.fx_editor_state["profile_source_var"],
+            values=("Map", "Current Deck"),
+            state="readonly",
+            width=12,
+            font=("Consolas", 8),
+        ).pack(side="left")
+        self.fx_editor_state["profile_value_combo"] = ttk.Combobox(
+            src_row,
+            textvariable=self.fx_editor_state["profile_value_var"],
+            values=(),
+            state="readonly",
+            width=20,
+            font=("Consolas", 8),
+        )
+        self.fx_editor_state["profile_value_combo"].pack(side="left", padx=(6, 0), fill="x", expand=True)
+        src_btns = tk.Frame(profile_box, bg=COLORS["CHARCOAL"])
+        src_btns.pack(fill="x", pady=(6, 0))
+        ModernButton(
+            src_btns,
+            text="REFRESH",
+            bg=COLORS["SURFACE_LIGHT"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_refresh_profile_choices,
+        ).pack(side="left")
+        ModernButton(
+            src_btns,
+            text="LOAD MAP",
+            bg=COLORS["SYS"],
+            fg="black",
+            width=9,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_load_profile_to_editor,
+        ).pack(side="left", padx=(6, 0))
+        if not self.fx_editor_state.get("profile_source_trace_attached"):
+            self.fx_editor_state["profile_source_var"].trace_add("write", lambda *_: self._fx_editor_refresh_profile_choices())
+            self.fx_editor_state["profile_source_trace_attached"] = True
+        self._fx_editor_refresh_profile_choices()
+
+        # Button assignment grid now lives on the Composer tab.
 
         # FX Quick Test (LED-only preview)
         quick = tk.LabelFrame(assign, text=" FX QUICK TEST ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
@@ -7489,8 +8995,8 @@ class ArcadeGUI_V2:
         preview_canvas.bind("<Configure>", lambda _e: self._fx_editor_draw_preview())
         self._fx_editor_draw_preview()
 
-        # Animation library/editor in unified Library -> Animations tab.
-        anim_catalog = tk.LabelFrame(anim_tab, text=" ANIMATION CATALOG ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
+        # Legacy animation catalog/editor now isolated in Catalog tab.
+        anim_catalog = tk.LabelFrame(catalog_tab, text=" ANIMATION CATALOG ", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"],
                                      font=("Segoe UI", 9, "bold"), padx=10, pady=8)
         anim_catalog.pack(fill="both", expand=True, pady=(2, 2))
         anim_cols = tk.Frame(anim_catalog, bg=COLORS["CHARCOAL"])
@@ -7536,7 +9042,8 @@ class ArcadeGUI_V2:
         ).pack(side="left")
 
         tk.Label(btn_row, text="Event", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
-        self.fx_editor_state["event_type_var"] = tk.StringVar(value="GAME_START")
+        if "event_type_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_type_var"] = tk.StringVar(value="GAME_START")
         ttk.Combobox(
             btn_row,
             textvariable=self.fx_editor_state["event_type_var"],
@@ -7558,7 +9065,8 @@ class ArcadeGUI_V2:
             font=("Consolas", 8),
         ).pack(side="left")
         tk.Label(btn_row, text="Anim", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
-        self.fx_editor_state["event_anim_var"] = tk.StringVar(value="RAINBOW")
+        if "event_anim_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_anim_var"] = tk.StringVar(value="RAINBOW")
         ttk.Combobox(
             btn_row,
             textvariable=self.fx_editor_state["event_anim_var"],
@@ -7568,7 +9076,8 @@ class ArcadeGUI_V2:
             font=("Consolas", 8),
         ).pack(side="left")
         tk.Label(btn_row, text="Dur(s)", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left", padx=(10, 4))
-        self.fx_editor_state["event_dur_var"] = tk.DoubleVar(value=3.0)
+        if "event_dur_var" not in self.fx_editor_state:
+            self.fx_editor_state["event_dur_var"] = tk.DoubleVar(value=3.0)
         tk.Entry(btn_row, textvariable=self.fx_editor_state["event_dur_var"], width=8, bg=COLORS["SURFACE_LIGHT"], fg="white",
                  font=("Consolas", 8), borderwidth=0).pack(side="left")
         ModernButton(
@@ -7591,6 +9100,15 @@ class ArcadeGUI_V2:
         ).pack(side="left", padx=(6, 0))
         ModernButton(
             btn_row,
+            text="STOP",
+            bg=COLORS["DANGER"],
+            fg="white",
+            width=8,
+            font=("Segoe UI", 8, "bold"),
+            command=self._fx_editor_stop_preview,
+        ).pack(side="left", padx=(6, 0))
+        ModernButton(
+            btn_row,
             text="BAKE AUDIO",
             bg=COLORS["SURFACE_LIGHT"],
             fg="white",
@@ -7602,7 +9120,8 @@ class ArcadeGUI_V2:
         name_row = tk.Frame(anim_catalog, bg=COLORS["CHARCOAL"])
         name_row.pack(fill="x", pady=(6, 0))
         tk.Label(name_row, text="Animation Name", bg=COLORS["CHARCOAL"], fg=COLORS["TEXT_DIM"], font=("Segoe UI", 8, "bold")).pack(side="left")
-        self.fx_editor_state["anim_name_var"] = tk.StringVar(value="")
+        if "anim_name_var" not in self.fx_editor_state:
+            self.fx_editor_state["anim_name_var"] = tk.StringVar(value="")
         tk.Entry(name_row, textvariable=self.fx_editor_state["anim_name_var"], bg=COLORS["SURFACE_LIGHT"], fg="white",
                  font=("Consolas", 8), borderwidth=0).pack(side="left", fill="x", expand=True, padx=(6, 6))
         ModernButton(
@@ -7625,12 +9144,13 @@ class ArcadeGUI_V2:
             catalog_info.config(text=f"Aliases: {alias_txt}")
 
         def _anim_lib_select(_evt=None):
+            if self.fx_editor_state.get("anim_select_sync"):
+                return
             sel = anim_lib_list.curselection()
             if not sel:
                 return
             name = anim_lib_list.get(sel[0])
-            self.fx_editor_state["selected_animation_name"] = name
-            self._fx_editor_draw_timeline()
+            self._fx_editor_select_animation(name)
 
         catalog_list.bind("<<ListboxSelect>>", _catalog_select)
         anim_lib_list.bind("<<ListboxSelect>>", _anim_lib_select)
@@ -8263,6 +9783,30 @@ class ArcadeGUI_V2:
                 # Emulate translucent lens/glow (similar to emulator)
                 c.itemconfigure(lens, fill=col, outline=col, stipple="gray25")
                 c.itemconfigure(glow, fill=col, state="normal", stipple="gray50")
+
+    def _fx_editor_stop_preview(self, update_status=True):
+        self.fx_editor_state["preview_active"] = False
+        self.fx_editor_state["anim_preview_active"] = False
+        self.fx_editor_state["audio_preview_active"] = False
+        self.fx_editor_state["audio_preview_frames"] = []
+        self.fx_editor_state["audio_preview_index"] = 0
+        self.fx_editor_state["preview_audio_sequence"] = None
+        self.fx_editor_state["anim_preview_queue"] = []
+        self.fx_editor_state["anim_preview_queue_index"] = 0
+        self.fx_editor_state["anim_preview_mode"] = None
+        self._fx_editor_stop_preview_audio()
+        if getattr(self, "animating", False) or getattr(self, "fx_active", None):
+            try:
+                self.stop_animation()
+            except Exception:
+                pass
+        if self.fx_editor_state.get("timeline_canvas"):
+            self._fx_editor_draw_timeline()
+        if self.fx_editor_state.get("preview_canvas"):
+            self._fx_editor_draw_preview()
+        if update_status and self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set("Preview stopped.")
+
     def _fx_editor_preview_toggle(self):
         active = self.fx_editor_state.get("preview_active", False)
         self.fx_editor_state["preview_active"] = not active
@@ -8271,7 +9815,7 @@ class ArcadeGUI_V2:
             self._fx_editor_start_preview_audio()
             self._fx_editor_preview_tick()
         else:
-            self._fx_editor_stop_preview_audio()
+            self._fx_editor_stop_preview(update_status=False)
     def _fx_editor_preview_button(self):
         was_active = self.fx_editor_state.get("preview_active", False)
         force_mod_preview = bool(self.fx_editor_state.pop("force_mod_preview_once", False))
@@ -8288,6 +9832,7 @@ class ArcadeGUI_V2:
         # Animation-specific preview remains available via the animation trigger flow.
         # FX preview should override animation preview while active.
         self.fx_editor_state["anim_preview_active"] = False
+        self.fx_editor_state["audio_preview_active"] = False
         # Ensure preview respects current trim bounds even if a previous sequence was built.
         if mode_key == "audio" and not was_active and self.audio_engine and (self.audio_analysis or self.audio_wav_path):
             try:
@@ -8506,12 +10051,531 @@ class ArcadeGUI_V2:
             win.after(60, self._fx_editor_preview_tick)
 
     def _fx_editor_refresh_animation_library(self):
-        lb = self.fx_editor_state.get("anim_lib_list")
+        names = sorted(self.animation_library.keys())
+        for key in ("anim_lib_list", "composer_anim_list"):
+            lb = self.fx_editor_state.get(key)
+            if not lb:
+                continue
+            lb.delete(0, tk.END)
+            for name in names:
+                lb.insert(tk.END, name)
+        selected = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        if selected and selected not in self.animation_library:
+            selected = ""
+            self.fx_editor_state["selected_animation_name"] = ""
+        if not selected:
+            draft_name = self.fx_editor_state.get("anim_name_var").get().strip() if self.fx_editor_state.get("anim_name_var") else ""
+            if draft_name in self.animation_library:
+                selected = draft_name
+                self.fx_editor_state["selected_animation_name"] = draft_name
+        if selected:
+            self._fx_editor_sync_animation_listbox("anim_lib_list", selected)
+            self._fx_editor_sync_animation_listbox("composer_anim_list", selected)
+        self._fx_editor_refresh_animation_steps()
+        self._sync_workstation_library()
+        if self.fx_editor_state.get("lib_list"):
+            self._fx_assets_refresh()
+        if self.fx_editor_state.get("asset_list"):
+            self._fx_editor_refresh_asset_cards()
+
+    def _fx_editor_sync_animation_listbox(self, list_key, name):
+        lb = self.fx_editor_state.get(list_key)
+        if not lb:
+            return
+        wanted = str(name or "")
+        current_sel = lb.curselection()
+        if wanted and current_sel:
+            try:
+                if str(lb.get(current_sel[0])) == wanted:
+                    return
+            except Exception:
+                pass
+        if not wanted and not current_sel:
+            return
+        self.fx_editor_state["anim_select_sync"] = True
+        try:
+            lb.selection_clear(0, tk.END)
+            if not wanted:
+                return
+            total = int(lb.size())
+            for i in range(total):
+                if str(lb.get(i)) == wanted:
+                    lb.selection_set(i)
+                    lb.activate(i)
+                    lb.see(i)
+                    break
+        finally:
+            self.fx_editor_state["anim_select_sync"] = False
+
+    def _fx_editor_select_animation(self, name):
+        chosen = str(name or "").strip()
+        if not chosen or chosen not in self.animation_library:
+            return
+        if (
+            str(self.fx_editor_state.get("selected_animation_name", "")).strip() == chosen
+            and self.fx_editor_state.get("anim_name_var")
+            and self.fx_editor_state["anim_name_var"].get().strip() == chosen
+        ):
+            return
+        self.fx_editor_state["selected_animation_name"] = chosen
+        if self.fx_editor_state.get("anim_name_var"):
+            self.fx_editor_state["anim_name_var"].set(chosen)
+        self._fx_editor_sync_animation_listbox("anim_lib_list", chosen)
+        self._fx_editor_sync_animation_listbox("composer_anim_list", chosen)
+        self._fx_editor_draw_timeline()
+        self._fx_editor_refresh_animation_steps()
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Editing animation '{chosen}'.")
+
+    def _fx_editor_new_animation_draft(self):
+        current = self.fx_editor_state.get("anim_name_var").get().strip() if self.fx_editor_state.get("anim_name_var") else ""
+        suggested = current or "NewAnimation"
+        name = simpledialog.askstring("New Animation", "Animation name:", initialvalue=suggested)
+        if name is None:
+            return
+        name = str(name).strip()
+        if not name:
+            messagebox.showinfo("New Animation", "Enter an animation name.")
+            return
+        created = False
+        if name in self.animation_library:
+            if not messagebox.askyesno("Animation Exists", f"Animation '{name}' already exists.\n\nOpen it?"):
+                return
+        else:
+            self.animation_library[name] = {"events": {}}
+            self._save_animation_library()
+            self._fx_editor_refresh_animation_library()
+            created = True
+        self._fx_editor_select_animation(name)
+        self._fx_editor_refresh_animation_steps()
+        self._fx_editor_draw_timeline()
+        if self.fx_editor_state.get("composer_status_var"):
+            if created:
+                self.fx_editor_state["composer_status_var"].set(f"Created animation '{name}'. Add steps and click SAVE.")
+            else:
+                self.fx_editor_state["composer_status_var"].set(f"Opened animation '{name}'.")
+
+    def _fx_editor_delete_animation(self):
+        name = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        if not name and self.fx_editor_state.get("anim_name_var"):
+            name = self.fx_editor_state["anim_name_var"].get().strip()
+        if not name:
+            messagebox.showinfo("Delete Animation", "Select or enter an animation name first.")
+            return
+        if name not in self.animation_library:
+            messagebox.showinfo("Delete Animation", f"Animation '{name}' was not found.")
+            return
+        if not messagebox.askyesno("Delete Animation", f"Delete animation '{name}'?\n\nThis cannot be undone."):
+            return
+        del self.animation_library[name]
+        if str(self.fx_editor_state.get("selected_animation_name", "")).strip() == name:
+            self.fx_editor_state["selected_animation_name"] = ""
+        if self.fx_editor_state.get("anim_name_var"):
+            self.fx_editor_state["anim_name_var"].set("")
+        self._save_animation_library()
+        self._fx_editor_refresh_animation_library()
+        self._fx_editor_draw_timeline()
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Deleted animation '{name}'.")
+
+    def _fx_editor_refresh_animation_steps(self):
+        lb = self.fx_editor_state.get("composer_step_list")
         if not lb:
             return
         lb.delete(0, tk.END)
-        for name in sorted(self.animation_library.keys()):
-            lb.insert(tk.END, name)
+        self.fx_editor_state["composer_step_index_map"] = []
+        name = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+        if not name:
+            return
+        anim_entry = self.animation_library.get(name, {})
+        events = anim_entry.get("events", {}) if isinstance(anim_entry, dict) else {}
+        seq = events.get(event, []) if isinstance(events, dict) else []
+        if not isinstance(seq, list):
+            seq = []
+        for i, step in enumerate(seq):
+            if not isinstance(step, dict):
+                continue
+            anim = str(step.get("anim", "")).strip() or "NONE"
+            try:
+                dur = float(step.get("duration", 0.0))
+            except Exception:
+                dur = 0.0
+            lb.insert(tk.END, f"{i+1:02d}. {anim} ({dur:.2f}s)")
+            self.fx_editor_state["composer_step_index_map"].append(i)
+
+    def _fx_editor_selected_step_index(self):
+        lb = self.fx_editor_state.get("composer_step_list")
+        if not lb:
+            return None
+        sel = lb.curselection()
+        if not sel:
+            return None
+        view_idx = int(sel[0])
+        index_map = self.fx_editor_state.get("composer_step_index_map", [])
+        if view_idx < 0 or view_idx >= len(index_map):
+            return None
+        return int(index_map[view_idx])
+
+    def _fx_editor_composer_anim_select(self, _evt=None):
+        if self.fx_editor_state.get("anim_select_sync"):
+            return
+        lb = self.fx_editor_state.get("composer_anim_list")
+        if not lb:
+            return
+        sel = lb.curselection()
+        if not sel:
+            return
+        name = lb.get(sel[0])
+        self._fx_editor_select_animation(name)
+
+    def _fx_editor_composer_step_select(self, _evt=None):
+        name = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        if not name:
+            return
+        event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+        anim_entry = self.animation_library.get(name, {})
+        events = anim_entry.get("events", {}) if isinstance(anim_entry, dict) else {}
+        seq = events.get(event, []) if isinstance(events, dict) else []
+        if not isinstance(seq, list):
+            return
+        idx = self._fx_editor_selected_step_index()
+        if idx is None or idx < 0 or idx >= len(seq):
+            return
+        step = seq[idx] if isinstance(seq[idx], dict) else {}
+        anim = str(step.get("anim", "")).strip()
+        try:
+            dur = float(step.get("duration", 1.0))
+        except Exception:
+            dur = 1.0
+        if self.fx_editor_state.get("event_anim_var") and anim:
+            self.fx_editor_state["event_anim_var"].set(anim)
+        if anim:
+            self._fx_editor_set_selected_asset(anim, refresh=True)
+        if self.fx_editor_state.get("event_dur_var"):
+            self.fx_editor_state["event_dur_var"].set(dur)
+
+    def _fx_editor_set_selected_asset(self, label, refresh=True):
+        sel = str(label or "").strip()
+        if self.fx_editor_state.get("asset_selected_var"):
+            self.fx_editor_state["asset_selected_var"].set(sel)
+        if self.fx_editor_state.get("event_anim_var"):
+            self.fx_editor_state["event_anim_var"].set(sel)
+        # Keep legacy FX library selection in sync when library selection matches a saved FX by name.
+        if self.fx_library:
+            fx_name = sel[4:].strip() if sel.upper().startswith("FX:") else sel
+            fx = self.fx_library.get_fx_by_name(fx_name) if hasattr(self.fx_library, "get_fx_by_name") else None
+            self.fx_editor_state["selected_fx"] = fx if isinstance(fx, dict) else None
+        if refresh:
+            self._fx_editor_refresh_asset_cards()
+
+    def _fx_editor_sync_grid_button_colors(self):
+        if not hasattr(self, "fx_editor_state"):
+            return
+        grid = self.fx_editor_state.get("grid_buttons", {})
+        if not isinstance(grid, dict) or not grid:
+            return
+        for key, btn in grid.items():
+            if key not in self.led_state:
+                continue
+            self._ensure_color_slots(key)
+            cols = [self._rgb_to_hex(*c) for c in self.led_state[key].get("colors", [(0, 0, 0)] * 4)]
+            if hasattr(btn, "set_colors"):
+                btn.set_colors(cols)
+
+    def _fx_editor_refresh_profile_choices(self):
+        if not hasattr(self, "fx_editor_state"):
+            return
+        source = self.fx_editor_state.get("profile_source_var").get().strip() if self.fx_editor_state.get("profile_source_var") else "Map"
+        choices = []
+        if source == "Map":
+            self._refresh_keymap_library()
+            choices = self._workstation_button_map_choices()
+        else:
+            choices = ["Current Deck"]
+
+        self.fx_editor_state["profile_game_map"] = {}
+        for combo_key in ("profile_value_combo", "composer_profile_value_combo"):
+            combo = self.fx_editor_state.get(combo_key)
+            if combo is not None:
+                combo["values"] = tuple(choices)
+        cur = self.fx_editor_state.get("profile_value_var").get().strip() if self.fx_editor_state.get("profile_value_var") else ""
+        if not cur or cur not in choices:
+            if self.fx_editor_state.get("profile_value_var"):
+                self.fx_editor_state["profile_value_var"].set(choices[0] if choices else "")
+
+    def _fx_editor_load_profile_to_editor(self):
+        source = self.fx_editor_state.get("profile_source_var").get().strip() if self.fx_editor_state.get("profile_source_var") else "Map"
+        selected = self.fx_editor_state.get("profile_value_var").get().strip() if self.fx_editor_state.get("profile_value_var") else ""
+        if source == "Current Deck":
+            self._fx_editor_sync_grid_button_colors()
+            self._fx_editor_draw_preview()
+            if self.fx_editor_state.get("composer_status_var"):
+                self.fx_editor_state["composer_status_var"].set("Loaded Current Deck colors into FX Editor.")
+            return
+
+        if not selected:
+            messagebox.showinfo("Load Map", "Select a map first.")
+            return
+        self._refresh_keymap_library()
+        controls = self._workstation_button_map_controls(selected)
+        if not isinstance(controls, dict) or not controls:
+            messagebox.showinfo("Load Map", f"Map '{selected}' has no saved controls.")
+            return
+        self._load_controls_into_commander_preview(controls, apply_hardware=False)
+        self._fx_editor_sync_grid_button_colors()
+        self._fx_editor_draw_preview()
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Loaded map '{selected}' into FX Editor.")
+
+    def _fx_editor_asset_entries(self):
+        q = self.fx_editor_state.get("asset_search_var").get().strip().lower() if self.fx_editor_state.get("asset_search_var") else ""
+        filter_mode = self.fx_editor_state.get("asset_filter_var").get().strip().lower() if self.fx_editor_state.get("asset_filter_var") else "all"
+        out = []
+        seen = set()
+        for item in self._get_shared_effect_catalog():
+            name = str(item.get("label", "")).strip()
+            if not name:
+                continue
+            etype = str(item.get("type", "animation")).strip().lower()
+            if filter_mode == "animations" and etype != "animation":
+                continue
+            if filter_mode == "effects" and etype != "effect":
+                continue
+            if q and q not in name.lower():
+                continue
+            out.append((name, etype))
+            seen.add(name.upper())
+        ws = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else {}
+        ws_anims = ws.get("animations", {}) if isinstance(ws, dict) else {}
+        if filter_mode in ("all", "animations") and isinstance(ws_anims, dict):
+            for name in sorted(ws_anims.keys(), key=lambda s: str(s).lower()):
+                label = str(name or "").strip()
+                if not label:
+                    continue
+                if label.upper() in seen:
+                    continue
+                if q and q not in label.lower():
+                    continue
+                out.append((label, "animation"))
+                seen.add(label.upper())
+        out.sort(key=lambda x: x[0].lower())
+        return out
+
+    def _fx_editor_selected_asset_name(self):
+        lb = self.fx_editor_state.get("asset_list")
+        if not lb:
+            return ""
+        sel = lb.curselection()
+        if not sel:
+            return ""
+        idx = int(sel[0])
+        index_map = self.fx_editor_state.get("asset_index_map", [])
+        if 0 <= idx < len(index_map):
+            return str(index_map[idx]).strip()
+        raw = str(lb.get(idx)).strip()
+        if raw.startswith("[A] ") or raw.startswith("[E] "):
+            raw = raw[4:].strip()
+        if raw.lower().startswith("no assets found"):
+            return ""
+        return raw
+
+    def _fx_editor_composer_asset_select(self, _evt=None):
+        if self.fx_editor_state.get("asset_select_sync"):
+            return
+        name = self._fx_editor_selected_asset_name()
+        if name:
+            self._fx_editor_set_selected_asset(name, refresh=False)
+
+    def _fx_editor_composer_preview_selected_asset(self):
+        name = self._fx_editor_selected_asset_name()
+        if not name and self.fx_editor_state.get("asset_selected_var"):
+            name = self.fx_editor_state["asset_selected_var"].get().strip()
+        if not name:
+            return
+        self._fx_editor_composer_preview_asset(name)
+
+    def _fx_editor_composer_add_selected_asset(self):
+        name = self._fx_editor_selected_asset_name()
+        if not name and self.fx_editor_state.get("asset_selected_var"):
+            name = self.fx_editor_state["asset_selected_var"].get().strip()
+        if not name:
+            return
+        self._fx_editor_composer_add_asset(name)
+
+    def _fx_editor_refresh_asset_cards(self):
+        lb = self.fx_editor_state.get("asset_list")
+        if not lb:
+            return
+        selected = self.fx_editor_state.get("asset_selected_var").get().strip() if self.fx_editor_state.get("asset_selected_var") else ""
+        entries = self._fx_editor_asset_entries()
+        self.fx_editor_state["asset_index_map"] = []
+        self.fx_editor_state["asset_select_sync"] = True
+        try:
+            lb.delete(0, tk.END)
+            if not entries:
+                lb.insert(tk.END, "No assets found for current search/filter.")
+                return
+            for name, etype in entries:
+                prefix = "[E]" if etype == "effect" else "[A]"
+                lb.insert(tk.END, f"{prefix} {name}")
+                self.fx_editor_state["asset_index_map"].append(name)
+            if selected:
+                for i, name in enumerate(self.fx_editor_state["asset_index_map"]):
+                    if name == selected:
+                        lb.selection_set(i)
+                        lb.activate(i)
+                        lb.see(i)
+                        break
+        finally:
+            self.fx_editor_state["asset_select_sync"] = False
+
+    def _fx_editor_composer_preview_asset(self, asset_name):
+        name = str(asset_name or "").strip()
+        if not name:
+            return
+        self._fx_editor_stop_preview(update_status=False)
+        self._fx_editor_set_selected_asset(name, refresh=True)
+        entry = self._resolve_shared_effect_entry(name)
+        if entry:
+            self.preview_animation(name)
+            return
+        if name in self.animation_library:
+            event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+            seq = self._animation_event_sequence(name, event)
+            if seq:
+                self._fx_editor_start_anim_sequence(seq, event_key=event)
+                return
+        self.preview_animation(name)
+
+    def _fx_editor_composer_add_asset(self, asset_name):
+        name = str(asset_name or "").strip()
+        if not name:
+            return
+        self._fx_editor_set_selected_asset(name, refresh=True)
+        lb = self.fx_editor_state.get("composer_step_list")
+        if lb:
+            lb.selection_clear(0, tk.END)
+        self._fx_editor_add_or_update_animation_step()
+
+    def _fx_editor_add_or_update_animation_step(self):
+        name = self.fx_editor_state.get("anim_name_var").get().strip() if self.fx_editor_state.get("anim_name_var") else ""
+        if not name:
+            messagebox.showinfo("Missing Name", "Enter an animation name first.")
+            return
+        event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+        anim = self.fx_editor_state.get("event_anim_var").get() if self.fx_editor_state.get("event_anim_var") else ""
+        if not str(anim).strip() and self.fx_editor_state.get("asset_selected_var"):
+            anim = self.fx_editor_state.get("asset_selected_var").get()
+        if not str(anim).strip():
+            messagebox.showinfo("Missing Animation", "Select an animation/effect for this step.")
+            return
+        if str(anim).strip().upper() == str(name).strip().upper():
+            messagebox.showinfo("Invalid Step", "An animation cannot directly reference itself as a step.")
+            return
+        try:
+            duration = float(self.fx_editor_state.get("event_dur_var").get()) if self.fx_editor_state.get("event_dur_var") else 1.0
+        except Exception:
+            duration = 1.0
+        duration = max(0.1, duration)
+
+        entry = self.animation_library.setdefault(name, {"events": {}})
+        if not isinstance(entry, dict):
+            entry = {"events": {}}
+            self.animation_library[name] = entry
+        events = entry.setdefault("events", {})
+        if not isinstance(events, dict):
+            events = {}
+            entry["events"] = events
+        seq = events.setdefault(event, [])
+        if not isinstance(seq, list):
+            seq = []
+            events[event] = seq
+
+        idx = self._fx_editor_selected_step_index()
+        step = {"anim": str(anim).strip(), "duration": duration}
+        mode = "added"
+        if idx is not None and 0 <= idx < len(seq):
+            seq[idx] = step
+            target_idx = idx
+            mode = "updated"
+        else:
+            seq.append(step)
+            target_idx = len(seq) - 1
+
+        self._save_animation_library()
+        self._fx_editor_refresh_animation_library()
+        self._fx_editor_select_animation(name)
+        self._fx_editor_refresh_animation_steps()
+        lb = self.fx_editor_state.get("composer_step_list")
+        if lb and 0 <= target_idx < int(lb.size()):
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(target_idx)
+            lb.activate(target_idx)
+            lb.see(target_idx)
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Step {mode} in '{name}' ({event}).")
+
+    def _fx_editor_remove_animation_step(self):
+        name = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        if not name:
+            messagebox.showinfo("Remove Step", "Select an animation first.")
+            return
+        event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+        anim_entry = self.animation_library.get(name, {})
+        events = anim_entry.get("events", {}) if isinstance(anim_entry, dict) else {}
+        seq = events.get(event, []) if isinstance(events, dict) else []
+        if not isinstance(seq, list) or not seq:
+            messagebox.showinfo("Remove Step", f"No {event} steps to remove.")
+            return
+        idx = self._fx_editor_selected_step_index()
+        if idx is None or idx < 0 or idx >= len(seq):
+            messagebox.showinfo("Remove Step", "Select a step first.")
+            return
+        del seq[idx]
+        self._save_animation_library()
+        self._fx_editor_refresh_animation_library()
+        self._fx_editor_select_animation(name)
+        self._fx_editor_refresh_animation_steps()
+        lb = self.fx_editor_state.get("composer_step_list")
+        if lb and int(lb.size()) > 0:
+            next_idx = min(idx, int(lb.size()) - 1)
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(next_idx)
+            lb.activate(next_idx)
+            lb.see(next_idx)
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Removed step from '{name}' ({event}).")
+
+    def _fx_editor_move_animation_step(self, direction):
+        name = str(self.fx_editor_state.get("selected_animation_name", "")).strip()
+        if not name:
+            return
+        event = self.fx_editor_state.get("event_type_var").get() if self.fx_editor_state.get("event_type_var") else "GAME_START"
+        anim_entry = self.animation_library.get(name, {})
+        events = anim_entry.get("events", {}) if isinstance(anim_entry, dict) else {}
+        seq = events.get(event, []) if isinstance(events, dict) else []
+        if not isinstance(seq, list) or len(seq) < 2:
+            return
+        idx = self._fx_editor_selected_step_index()
+        if idx is None:
+            return
+        new_idx = int(idx) + int(direction)
+        if new_idx < 0 or new_idx >= len(seq):
+            return
+        seq[idx], seq[new_idx] = seq[new_idx], seq[idx]
+        self._save_animation_library()
+        self._fx_editor_refresh_animation_library()
+        self._fx_editor_select_animation(name)
+        self._fx_editor_refresh_animation_steps()
+        lb = self.fx_editor_state.get("composer_step_list")
+        if lb and 0 <= new_idx < int(lb.size()):
+            lb.selection_clear(0, tk.END)
+            lb.selection_set(new_idx)
+            lb.activate(new_idx)
+            lb.see(new_idx)
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Reordered step in '{name}' ({event}).")
 
     def _fx_editor_add_event_to_animation(self):
         name = self.fx_editor_state.get("anim_name_var").get().strip()
@@ -8530,8 +10594,9 @@ class ArcadeGUI_V2:
         events[event].append({"anim": anim, "duration": max(0.1, duration)})
         self._save_animation_library()
         self._fx_editor_refresh_animation_library()
-        self.fx_editor_state["selected_animation_name"] = name
-        self._fx_editor_draw_timeline()
+        self._fx_editor_select_animation(name)
+        if self.fx_editor_state.get("composer_status_var"):
+            self.fx_editor_state["composer_status_var"].set(f"Step added to '{name}' ({event}).")
 
     def _fx_editor_save_animation(self):
         name = self.fx_editor_state.get("anim_name_var").get().strip()
@@ -8542,35 +10607,43 @@ class ArcadeGUI_V2:
             self.animation_library[name] = {"events": {}}
         self._save_animation_library()
         self._fx_editor_refresh_animation_library()
-        self.fx_editor_state["selected_animation_name"] = name
-        self._fx_editor_draw_timeline()
+        self._fx_editor_select_animation(name)
         messagebox.showinfo("Saved", f"Animation '{name}' saved.")
 
     def _fx_editor_trigger_event_preview(self):
         event = self.fx_editor_state.get("event_type_var").get()
+        event_key = str(event or "").strip().upper()
         anim_name = self.fx_editor_state.get("selected_animation_name")
+        if not anim_name and self.fx_editor_state.get("anim_name_var"):
+            candidate = self.fx_editor_state["anim_name_var"].get().strip()
+            if candidate in self.animation_library:
+                anim_name = candidate
+                self._fx_editor_select_animation(candidate)
         if not anim_name:
             messagebox.showinfo("No Animation", "Select an animation from the library.")
             return
         # Ensure animation preview has ownership of the canvas.
-        self.fx_editor_state["preview_active"] = False
-        self._fx_editor_stop_preview_audio()
+        self._fx_editor_stop_preview(update_status=False)
         anim = self.animation_library.get(anim_name, {})
         if anim.get("audio_sequence"):
-            self._fx_editor_preview_audio_sequence(anim.get("audio_sequence"), event)
+            self._fx_editor_preview_audio_sequence(anim.get("audio_sequence"), event_key)
             return
         events = anim.get("events", {})
-        seq = events.get(event, [])
+        seq = events.get(event_key, [])
+        if not seq and event_key == "GAME_START":
+            seq = events.get("START", [])
+        if not seq and event_key == "GAME_QUIT":
+            seq = events.get("END", [])
+        if not seq and event_key == "DEFAULT":
+            seq = events.get("IDLE", [])
         if not seq:
-            messagebox.showinfo("No Event", f"No {event} events defined for this animation.")
+            messagebox.showinfo("No Event", f"No {event_key} events defined for this animation.")
             return
-        self._fx_editor_start_anim_sequence(seq)
+        self._fx_editor_start_anim_sequence(seq, event_key=event_key)
 
     def _fx_editor_all_off(self):
         # Local-only: stop preview animations and clear FX editor preview LEDs
-        self.fx_editor_state["preview_active"] = False
-        self.fx_editor_state["anim_preview_active"] = False
-        self._fx_editor_stop_preview_audio()
+        self._fx_editor_stop_preview(update_status=False)
         c = self.fx_editor_state.get("preview_canvas")
         leds = self.fx_editor_state.get("preview_leds", [])
         if c and leds:
@@ -8587,8 +10660,7 @@ class ArcadeGUI_V2:
         if not lb or not lb.curselection():
             return
         # Ensure animation preview has ownership of the canvas.
-        self.fx_editor_state["preview_active"] = False
-        self._fx_editor_stop_preview_audio()
+        self._fx_editor_stop_preview(update_status=False)
         anim = lb.get(lb.curselection()[0])
         self.fx_editor_state["anim_preview_mode"] = anim
         self.fx_editor_state["anim_preview_active"] = True
@@ -8597,9 +10669,83 @@ class ArcadeGUI_V2:
         self.fx_editor_state["anim_preview_queue_index"] = 0
         self._fx_editor_anim_preview_tick()
 
-    def _fx_editor_start_anim_sequence(self, seq):
+    def _animation_event_sequence(self, anim_name, event_key):
+        key = str(event_key or "").strip().upper() or "GAME_START"
+        anim = self.animation_library.get(anim_name, {}) if isinstance(getattr(self, "animation_library", None), dict) else {}
+        events = anim.get("events", {}) if isinstance(anim, dict) else {}
+        if not isinstance(events, dict):
+            return []
+        lookup_order = [key]
+        if key == "GAME_START":
+            lookup_order.extend(["START", "DEFAULT", "IDLE"])
+        elif key == "GAME_QUIT":
+            lookup_order.extend(["END", "DEFAULT", "IDLE"])
+        elif key == "DEFAULT":
+            lookup_order.extend(["IDLE"])
+        else:
+            lookup_order.extend(["DEFAULT", "IDLE"])
+        for wanted in lookup_order:
+            for evt_name, evt_seq in events.items():
+                if str(evt_name).strip().upper() == wanted and isinstance(evt_seq, list) and evt_seq:
+                    return evt_seq
+        return []
+
+    def _expand_animation_step_for_queue(self, anim_name, duration, event_key, seen=None):
+        name = str(anim_name or "").strip()
+        if not name:
+            return []
+        try:
+            dur = max(0.1, float(duration))
+        except Exception:
+            dur = 0.1
+        entry = self._resolve_shared_effect_entry(name)
+        if entry:
+            etype = str(entry.get("type", "animation")).strip().lower()
+            if etype == "effect":
+                label = str(entry.get("label", "")).strip() or name
+                return [{"anim": label, "duration": dur}]
+            resolved = str(entry.get("animation", "")).strip() or name
+            return [{"anim": resolved, "duration": dur}]
+        anim_lib = self.animation_library if isinstance(getattr(self, "animation_library", None), dict) else {}
+        anim_key = None
+        if name in anim_lib:
+            anim_key = name
+        else:
+            upper_name = name.upper()
+            for existing in anim_lib.keys():
+                if str(existing).strip().upper() == upper_name:
+                    anim_key = existing
+                    break
+        if not anim_key:
+            return [{"anim": name, "duration": dur}]
+        seen_set = set(seen or [])
+        guard = str(anim_key).strip().upper()
+        if guard in seen_set:
+            return []
+        nested_seq = self._animation_event_sequence(anim_key, event_key)
+        if not nested_seq:
+            return [{"anim": name, "duration": dur}]
+        out = []
+        seen_set.add(guard)
+        for step in nested_seq:
+            if not isinstance(step, dict):
+                continue
+            nested_name = str(step.get("anim", "")).strip()
+            if not nested_name:
+                continue
+            try:
+                nested_dur = float(step.get("duration", dur))
+            except Exception:
+                nested_dur = dur
+            out.extend(self._expand_animation_step_for_queue(nested_name, nested_dur, event_key, seen_set))
+        return out
+
+    def _fx_editor_start_anim_sequence(self, seq, event_key="GAME_START"):
         if not isinstance(seq, list) or not seq:
             return
+        self.fx_editor_state["preview_active"] = False
+        self.fx_editor_state["audio_preview_active"] = False
+        self._fx_editor_stop_preview_audio()
         queue = []
         for step in seq:
             if not isinstance(step, dict):
@@ -8611,7 +10757,7 @@ class ArcadeGUI_V2:
                 duration = float(step.get("duration", 2.0))
             except Exception:
                 duration = 2.0
-            queue.append({"anim": mode, "duration": max(0.1, duration)})
+            queue.extend(self._expand_animation_step_for_queue(mode, max(0.1, duration), event_key))
         if not queue:
             return
         self.fx_editor_state["anim_preview_queue"] = queue
@@ -8666,6 +10812,30 @@ class ArcadeGUI_V2:
             elif mode == "HYPER_STROBE":
                 on = int(t * 12) % 2 == 0
                 col = "#FFFFFF" if on else "#111111"
+            elif mode == "TEASE":
+                sweep_period = 16.0
+                sweep = (t % sweep_period) / sweep_period
+                sweep_mix = 1.0 - abs((2.0 * sweep) - 1.0)
+                hz = 0.5 + (1.5 * sweep_mix)
+                phase_offset = (i * 0.61803398875) % 1.0
+                pulse = 0.5 + (0.5 * math.sin((t * hz * math.tau) + (phase_offset * math.tau)))
+                brightness = 0.08 + (0.92 * pulse)
+                hue = ((t * 0.03) + ((i * 0.38196601125) % 1.0)) % 1.0
+                r, g, b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+                col = self._rgb_to_hex(int(r * 255 * brightness), int(g * 255 * brightness), int(b * 255 * brightness))
+            elif mode == "TEASE_INDEPENDENT":
+                sweep_period = 16.0
+                sweep_offset = ((i * 0.41421356237) % 1.0) * sweep_period
+                sweep = ((t + sweep_offset) % sweep_period) / sweep_period
+                sweep_mix = 1.0 - abs((2.0 * sweep) - 1.0)
+                hz = 0.5 + (1.5 * sweep_mix)
+                phase_offset = (i * 0.61803398875) % 1.0
+                pulse = 0.5 + (0.5 * math.sin((t * hz * math.tau) + (phase_offset * math.tau)))
+                brightness = 0.08 + (0.92 * pulse)
+                hue_speed = 0.03 * (0.75 + (((i * 0.27182818284) % 1.0) * 0.90))
+                hue = ((t * hue_speed) + ((i * 0.38196601125) % 1.0)) % 1.0
+                r, g, b = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+                col = self._rgb_to_hex(int(r * 255 * brightness), int(g * 255 * brightness), int(b * 255 * brightness))
             else:
                 col = COLORS["SURFACE_LIGHT"]
             mod_val = self._fx_editor_modulation_value(
@@ -8696,23 +10866,30 @@ class ArcadeGUI_V2:
         if not name:
             return
         self.animation_library[name] = {
-            "events": {"START": [], "END": [], "IDLE": []},
+            "events": {
+                "GAME_START": [],
+                "DEFAULT": [],
+                "GAME_QUIT": [],
+                "START": [],
+                "IDLE": [],
+                "END": [],
+            },
             "audio_sequence": self.audio_sequence,
             "meta": {"source": "audio_bake"},
         }
         self._save_animation_library()
         self._fx_editor_refresh_animation_library()
-        self.fx_editor_state["selected_animation_name"] = name
-        self._fx_editor_draw_timeline()
+        self._fx_editor_select_animation(name)
         messagebox.showinfo("Baked", f"Audio baked into animation '{name}'.")
 
     def _fx_editor_preview_audio_sequence(self, sequence, event):
         if not sequence:
             return
+        event_key = str(event or "").strip().upper()
         phase = "main"
-        if event == "START":
+        if event_key in ("START", "GAME_START", "FE_START"):
             phase = "entrance"
-        elif event == "END":
+        elif event_key in ("END", "GAME_QUIT", "FE_QUIT"):
             phase = "exit"
         frames = (sequence.get(phase, {}) or {}).get("frames", [])
         if not frames:
@@ -8859,36 +11036,416 @@ class ArcadeGUI_V2:
             except Exception:
                 pass
             self.fx_editor_state["audio_playing"] = False
-    def _fx_library_refresh(self):
-        if not self.fx_library or "lib_list" not in self.fx_editor_state:
+    def _fx_assets_item_key(self, entry):
+        if not isinstance(entry, dict):
+            return ""
+        kind = str(entry.get("kind", "")).strip().lower()
+        name = str(entry.get("name", "")).strip().lower()
+        return f"{kind}:{name}"
+
+    def _fx_assets_entries(self):
+        q = self.fx_editor_state.get("lib_search_var").get().strip().lower() if self.fx_editor_state.get("lib_search_var") else ""
+        mode = self.fx_editor_state.get("lib_filter_var").get().strip().lower() if self.fx_editor_state.get("lib_filter_var") else "all"
+        entries = []
+
+        include_effects = mode in ("", "all", "effects", "effect", "audio", "presets")
+        include_animations = mode in ("all", "animations", "animation")
+        include_maps = mode in ("all", "button_maps", "button map", "button maps", "maps", "buttons")
+
+        fx_items = []
+        if self.fx_library and isinstance(getattr(self.fx_library, "_db", None), dict):
+            fx_items = list(self.fx_library._db.get("fx", {}).values())
+        fav = [f for f in fx_items if isinstance(f, dict) and f.get("starred")]
+        rest = [f for f in fx_items if isinstance(f, dict) and not f.get("starred")]
+        ordered_fx = fav + rest
+        self.fx_library_cache = ordered_fx
+        if include_effects:
+            for fx in ordered_fx:
+                name = str(fx.get("name", "Unnamed")).strip() or "Unnamed"
+                if q and q not in name.lower():
+                    continue
+                if not self._fx_library_matches_filter(fx, mode):
+                    continue
+                meta = fx.get("meta", {}) if isinstance(fx.get("meta", {}), dict) else {}
+                entries.append(
+                    {
+                        "kind": "effect",
+                        "name": name,
+                        "fx": fx,
+                        "audio_path": str(fx.get("audio_path", "")),
+                        "source": str(meta.get("source", "")),
+                    }
+                )
+
+        if include_animations and isinstance(getattr(self, "animation_library", None), dict):
+            for name in sorted(self.animation_library.keys(), key=lambda s: str(s).lower()):
+                label = str(name or "").strip()
+                if not label:
+                    continue
+                if q and q not in label.lower():
+                    continue
+                anim = self.animation_library.get(label, {})
+                entries.append(
+                    {
+                        "kind": "animation",
+                        "name": label,
+                        "animation": anim if isinstance(anim, dict) else {},
+                    }
+                )
+
+        if include_maps:
+            keymaps = self.keymap_library if isinstance(getattr(self, "keymap_library", None), dict) else {}
+            ws = self.workstation_library if isinstance(getattr(self, "workstation_library", None), dict) else {}
+            ws_maps = ws.get("button_maps", {}) if isinstance(ws.get("button_maps", {}), dict) else {}
+            for name in self._workstation_button_map_choices():
+                label = str(name or "").strip()
+                if not label:
+                    continue
+                if q and q not in label.lower():
+                    continue
+                km_entry = keymaps.get(label)
+                if not km_entry and isinstance(keymaps, dict):
+                    target = label.lower()
+                    for k, item in keymaps.items():
+                        if str(k).strip().lower() == target:
+                            km_entry = item
+                            break
+                ws_entry = ws_maps.get(label)
+                if not ws_entry and isinstance(ws_maps, dict):
+                    target = label.lower()
+                    for k, item in ws_maps.items():
+                        if str(k).strip().lower() == target:
+                            ws_entry = item
+                            break
+                controls = self._workstation_button_map_controls(label)
+                source = "keymap" if isinstance(km_entry, dict) else str(ws_entry.get("source", "map")) if isinstance(ws_entry, dict) else "map"
+                path = str(km_entry.get("path", "")) if isinstance(km_entry, dict) else str(ws_entry.get("path", "")) if isinstance(ws_entry, dict) else ""
+                entries.append(
+                    {
+                        "kind": "button_map",
+                        "name": label,
+                        "controls": controls if isinstance(controls, dict) else {},
+                        "source": source,
+                        "path": path,
+                    }
+                )
+        return entries
+
+    def _fx_assets_item_from_index(self, idx):
+        entries = self.fx_editor_state.get("asset_manager_entries", [])
+        if not isinstance(entries, list):
+            return None
+        if idx < 0 or idx >= len(entries):
+            return None
+        item = entries[idx]
+        return item if isinstance(item, dict) else None
+
+    def _fx_assets_selected_entry(self):
+        lb = self.fx_editor_state.get("lib_list")
+        if not lb:
+            return None
+        sel = lb.curselection()
+        if not sel:
+            return self.fx_editor_state.get("selected_asset")
+        item = self._fx_assets_item_from_index(int(sel[0]))
+        if item:
+            self.fx_editor_state["selected_asset"] = item
+            self.fx_editor_state["selected_asset_key"] = self._fx_assets_item_key(item)
+        return item
+
+    def _fx_assets_refresh(self):
+        lb = self.fx_editor_state.get("lib_list")
+        if not lb:
             return
-        q = self.fx_editor_state["lib_search_var"].get().strip().lower()
-        filter_mode = (self.fx_editor_state.get("lib_filter_var").get().strip().lower() if self.fx_editor_state.get("lib_filter_var") else "all")
-        fx_items = list(self.fx_library._db.get("fx", {}).values())
-        fav = [f for f in fx_items if f.get("starred")]
-        rest = [f for f in fx_items if not f.get("starred")]
-        ordered = fav + rest
-        self.fx_library_cache = ordered
-        lb = self.fx_editor_state["lib_list"]
+        entries = self._fx_assets_entries()
+        self.fx_editor_state["asset_manager_entries"] = entries
+        selected_key = str(self.fx_editor_state.get("selected_asset_key", "")).strip()
         lb.delete(0, tk.END)
-        for fx in ordered:
-            name = fx.get("name", "Unnamed")
-            is_audio = bool(fx.get("audio_path"))
-            if not self._fx_library_matches_filter(fx, filter_mode):
-                continue
-            meta = fx.get("meta", {}) if isinstance(fx.get("meta", {}), dict) else {}
-            if meta.get("source") == "effects_preset":
-                icon = "E"
+        selected_idx = None
+        for idx, entry in enumerate(entries):
+            kind = entry.get("kind", "")
+            name = str(entry.get("name", "")).strip() or "Unnamed"
+            if kind == "effect":
+                prefix = "[FX]"
+            elif kind == "animation":
+                prefix = "[ANM]"
             else:
-                icon = "A" if is_audio else "P"
-            if q and q not in name.lower():
-                continue
-            lb.insert(tk.END, f"[{icon}] {name}")
+                prefix = "[MAP]"
+            lb.insert(tk.END, f"{prefix} {name}")
+            if selected_key and self._fx_assets_item_key(entry) == selected_key:
+                selected_idx = idx
+        if selected_idx is not None:
+            lb.selection_set(selected_idx)
+            lb.activate(selected_idx)
+            lb.see(selected_idx)
+            item = self._fx_assets_item_from_index(selected_idx)
+            if item:
+                self.fx_editor_state["selected_asset"] = item
+        elif entries:
+            lb.selection_set(0)
+            lb.activate(0)
+            lb.see(0)
+            self.fx_editor_state["selected_asset"] = entries[0]
+            self.fx_editor_state["selected_asset_key"] = self._fx_assets_item_key(entries[0])
+        else:
+            self.fx_editor_state["selected_asset"] = None
+            self.fx_editor_state["selected_asset_key"] = ""
+
+    def _fx_assets_select(self, _evt=None):
+        entry = self._fx_assets_selected_entry()
+        if not isinstance(entry, dict):
+            return
+        if entry.get("kind") == "effect":
+            self.fx_editor_state["selected_fx"] = entry.get("fx")
+
+    def _fx_assets_load_selected(self):
+        entry = self._fx_assets_selected_entry()
+        if not isinstance(entry, dict):
+            messagebox.showinfo("Assets", "Select an asset first.")
+            return
+        kind = str(entry.get("kind", "")).strip().lower()
+        name = str(entry.get("name", "")).strip()
+        if kind == "effect":
+            self.fx_editor_state["selected_fx"] = entry.get("fx")
+            self._fx_editor_load_selected_fx()
+            return
+        if kind == "animation":
+            if name:
+                self._fx_editor_select_animation(name)
+                if self.fx_editor_state.get("composer_status_var"):
+                    self.fx_editor_state["composer_status_var"].set(f"Loaded animation '{name}'.")
+            return
+        if kind == "button_map":
+            if self.fx_editor_state.get("profile_source_var"):
+                self.fx_editor_state["profile_source_var"].set("Map")
+            if self.fx_editor_state.get("profile_value_var"):
+                self.fx_editor_state["profile_value_var"].set(name)
+            self._fx_editor_load_profile_to_editor()
+            return
+
+    def _fx_assets_preview_selected(self):
+        entry = self._fx_assets_selected_entry()
+        if not isinstance(entry, dict):
+            messagebox.showinfo("Assets", "Select an asset first.")
+            return
+        self._fx_editor_stop_preview(update_status=False)
+        kind = str(entry.get("kind", "")).strip().lower()
+        name = str(entry.get("name", "")).strip()
+        if kind == "effect":
+            self.fx_editor_state["selected_fx"] = entry.get("fx")
+            self._fx_editor_preview_selected_fx()
+            return
+        if kind == "animation":
+            self._fx_editor_composer_preview_asset(name)
+            return
+        if kind == "button_map":
+            if self.fx_editor_state.get("profile_source_var"):
+                self.fx_editor_state["profile_source_var"].set("Map")
+            if self.fx_editor_state.get("profile_value_var"):
+                self.fx_editor_state["profile_value_var"].set(name)
+            self._fx_editor_load_profile_to_editor()
+            return
+
+    def _fx_assets_import_animation(self):
+        path = filedialog.askopenfilename(title="Import Animation", filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            messagebox.showerror("Import Animation", f"Could not read file:\n{exc}")
+            return
+        name = ""
+        payload = {}
+        if isinstance(data, dict) and "name" in data:
+            name = str(data.get("name", "")).strip()
+            payload = copy.deepcopy(data)
+            payload.pop("name", None)
+        elif isinstance(data, dict) and len(data) == 1:
+            k = next(iter(data.keys()))
+            v = data.get(k)
+            if isinstance(v, dict):
+                name = str(k).strip()
+                payload = copy.deepcopy(v)
+        if not name:
+            name = os.path.splitext(os.path.basename(path))[0]
+        if not isinstance(payload, dict):
+            payload = {}
+        if "events" not in payload or not isinstance(payload.get("events"), dict):
+            payload["events"] = {}
+        if name in self.animation_library:
+            if not messagebox.askyesno("Import Animation", f"Animation '{name}' exists. Overwrite?"):
+                return
+        self.animation_library[name] = payload
+        self._save_animation_library()
+        self._fx_editor_refresh_animation_library()
+        self._fx_assets_refresh()
+        self.fx_editor_state["selected_asset_key"] = f"animation:{name.lower()}"
+        self._fx_assets_refresh()
+
+    def _fx_assets_import_button_map(self):
+        path = filedialog.askopenfilename(title="Import Button Map", filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            messagebox.showerror("Import Button Map", f"Could not read file:\n{exc}")
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror("Import Button Map", "Invalid file format.")
+            return
+        controls = self._normalize_controls_payload(data)
+        if not controls:
+            messagebox.showerror("Import Button Map", "No button control data found.")
+            return
+        name = str(data.get("name", "")).strip() or os.path.splitext(os.path.basename(path))[0]
+        target_dir = getattr(self, "workstation_button_map_dir", "") or self.keymap_dir
+        os.makedirs(target_dir, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9 ]+", "", name).strip() or "ButtonMap"
+        target = os.path.join(target_dir, f"{safe}.json")
+        if os.path.exists(target):
+            if not messagebox.askyesno("Import Button Map", f"Map exists:\n{target}\n\nOverwrite?"):
+                return
+        payload = {"name": name, "controls": controls, "saved_at": time.time()}
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        self._refresh_keymap_library()
+        self._fx_assets_refresh()
+        self.fx_editor_state["selected_asset_key"] = f"button_map:{name.lower()}"
+        self._fx_assets_refresh()
+
+    def _fx_assets_import(self):
+        mode = self.fx_editor_state.get("lib_filter_var").get().strip().lower() if self.fx_editor_state.get("lib_filter_var") else "all"
+        if mode in ("effects", "effect", "audio", "presets"):
+            self._fx_library_import()
+            return
+        if mode in ("animations", "animation"):
+            self._fx_assets_import_animation()
+            return
+        if mode in ("button_maps", "button map", "button maps", "maps", "buttons"):
+            self._fx_assets_import_button_map()
+            return
+        choice = simpledialog.askstring(
+            "Import Asset",
+            "Type to import: effect, animation, button_map",
+            initialvalue="effect",
+        )
+        choice = str(choice or "").strip().lower()
+        if choice in ("effect", "effects", "fx"):
+            self._fx_library_import()
+            return
+        if choice in ("animation", "animations", "anim"):
+            self._fx_assets_import_animation()
+            return
+        if choice in ("button_map", "button map", "button_maps", "map", "maps"):
+            self._fx_assets_import_button_map()
+            return
+
+    def _fx_assets_export_selected(self):
+        entry = self._fx_assets_selected_entry()
+        if not isinstance(entry, dict):
+            messagebox.showinfo("Assets", "Select an asset first.")
+            return
+        kind = str(entry.get("kind", "")).strip().lower()
+        name = str(entry.get("name", "")).strip() or "Asset"
+        if kind == "effect":
+            self.fx_editor_state["selected_fx"] = entry.get("fx")
+            self._fx_library_export()
+            return
+        if kind == "animation":
+            payload = copy.deepcopy(entry.get("animation") if isinstance(entry.get("animation"), dict) else {})
+            payload = payload if isinstance(payload, dict) else {}
+            payload["name"] = name
+            default_name = re.sub(r"[^A-Za-z0-9 ]+", "", name).strip() or "Animation"
+            path = filedialog.asksaveasfilename(
+                title="Export Animation",
+                defaultextension=".json",
+                initialfile=f"{default_name}.json",
+                filetypes=[("JSON", "*.json")],
+            )
+            if not path:
+                return
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            messagebox.showinfo("Exported", f"Exported animation to:\n{path}")
+            return
+        if kind == "button_map":
+            controls = entry.get("controls") if isinstance(entry.get("controls"), dict) else self._workstation_button_map_controls(name)
+            payload = {"name": name, "controls": controls if isinstance(controls, dict) else {}, "saved_at": time.time()}
+            default_name = re.sub(r"[^A-Za-z0-9 ]+", "", name).strip() or "ButtonMap"
+            path = filedialog.asksaveasfilename(
+                title="Export Button Map",
+                defaultextension=".json",
+                initialfile=f"{default_name}.json",
+                filetypes=[("JSON", "*.json")],
+            )
+            if not path:
+                return
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            messagebox.showinfo("Exported", f"Exported button map to:\n{path}")
+            return
+
+    def _fx_assets_delete_selected(self):
+        entry = self._fx_assets_selected_entry()
+        if not isinstance(entry, dict):
+            messagebox.showinfo("Assets", "Select an asset first.")
+            return
+        kind = str(entry.get("kind", "")).strip().lower()
+        name = str(entry.get("name", "")).strip()
+        if kind == "effect":
+            self.fx_editor_state["selected_fx"] = entry.get("fx")
+            self._fx_library_delete()
+            self._fx_assets_refresh()
+            return
+        if kind == "animation":
+            if name not in self.animation_library:
+                return
+            if not messagebox.askyesno("Delete Animation", f"Delete animation '{name}'?"):
+                return
+            self.animation_library.pop(name, None)
+            if str(self.fx_editor_state.get("selected_animation_name", "")).strip() == name:
+                self.fx_editor_state["selected_animation_name"] = ""
+            self._save_animation_library()
+            self._fx_editor_refresh_animation_library()
+            self._fx_assets_refresh()
+            return
+        if kind == "button_map":
+            source = str(entry.get("source", "")).strip().lower()
+            path = str(entry.get("path", "")).strip()
+            if source != "keymap":
+                messagebox.showinfo("Delete Button Map", "Only keymap files can be deleted here.")
+                return
+            if not path or not os.path.isfile(path):
+                messagebox.showinfo("Delete Button Map", "Map file was not found on disk.")
+                return
+            if not messagebox.askyesno("Delete Button Map", f"Delete map '{name}'?\n\n{path}"):
+                return
+            try:
+                os.remove(path)
+            except Exception as exc:
+                messagebox.showerror("Delete Button Map", f"Could not delete map:\n{exc}")
+                return
+            self._refresh_keymap_library()
+            self._fx_assets_refresh()
+            if self.fx_editor_state.get("composer_status_var"):
+                self.fx_editor_state["composer_status_var"].set(f"Deleted button map '{name}'.")
+
+    def _fx_library_refresh(self):
+        self._fx_assets_refresh()
+
     def _fx_library_matches_filter(self, fx, filter_mode):
         mode = str(filter_mode or "all").strip().lower()
         if mode in ("", "all"):
             return True
         meta = fx.get("meta", {}) if isinstance(fx.get("meta", {}), dict) else {}
+        if mode in ("effects", "effect"):
+            return True
+        if mode in ("animations", "animation", "button_maps", "button map", "button maps", "maps", "buttons"):
+            return False
         if mode == "audio":
             return bool(fx.get("audio_path"))
         if mode == "presets":
@@ -9103,6 +11660,7 @@ class ArcadeGUI_V2:
                 self._fx_library_refresh()
             if hasattr(self, "fx_lib_list"):
                 self._fx_tab_library_refresh()
+            self._sync_workstation_library()
     def _fx_library_select(self, _evt=None):
         lb = self.fx_editor_state.get("lib_list")
         if not lb:
@@ -9254,6 +11812,7 @@ class ArcadeGUI_V2:
         fx["name"] = new_name
         self.fx_library.save_fx(fx)
         self._fx_library_refresh()
+        self._sync_workstation_library()
     def _fx_library_duplicate(self):
         fx = self.fx_editor_state.get("selected_fx")
         if not fx:
@@ -9263,6 +11822,7 @@ class ArcadeGUI_V2:
             return
         self.fx_library.clone_fx(fx.get("fx_id"), new_name)
         self._fx_library_refresh()
+        self._sync_workstation_library()
     def _fx_library_import(self):
         if not self.fx_library:
             messagebox.showinfo("FX Library", "FX Library unavailable.")
@@ -9292,6 +11852,7 @@ class ArcadeGUI_V2:
         if hasattr(self, "fx_lib_list"):
             self.fx_lib_selected_id = fx_id
             self._fx_tab_library_refresh()
+        self._sync_workstation_library()
         messagebox.showinfo("Imported", f"Imported FX '{data.get('name','FX')}'.")
     def _fx_library_export(self):
         fx = self.fx_editor_state.get("selected_fx")
@@ -9317,6 +11878,7 @@ class ArcadeGUI_V2:
                 del self.fx_library._db["fx"][fx_id]
                 self.fx_library._save()
             self._fx_library_refresh()
+            self._sync_workstation_library()
     def _fx_library_toggle_star(self):
         fx = self.fx_editor_state.get("selected_fx")
         if not fx:
@@ -9656,6 +12218,7 @@ class ArcadeGUI_V2:
         self._fx_tab_library_refresh()
         if self.fx_editor_window and self.fx_editor_window.winfo_exists():
             self._fx_library_refresh()
+        self._sync_workstation_library()
         messagebox.showinfo("Saved", f"FX '{name}' saved to library.")
     def _fx_tab_library_export(self):
         if not self.fx_library:
@@ -9706,6 +12269,7 @@ class ArcadeGUI_V2:
         self._fx_tab_library_refresh()
         if self.fx_editor_window and self.fx_editor_window.winfo_exists():
             self._fx_library_refresh()
+        self._sync_workstation_library()
         messagebox.showinfo("Imported", f"Imported FX '{data.get('name','FX')}'.")
     def _fx_tab_library_delete(self):
         if not self.fx_library:
@@ -9724,6 +12288,7 @@ class ArcadeGUI_V2:
             self._fx_tab_library_refresh()
             if self.fx_editor_window and self.fx_editor_window.winfo_exists():
                 self._fx_library_refresh()
+            self._sync_workstation_library()
     def fx_apply_library_to_game(self):
         if not self.fx_selected_rom:
             messagebox.showinfo("No Game Selected", "Select a game to apply FX.")
@@ -10531,6 +13096,7 @@ class ArcadeGUI_V2:
             target = getattr(self, "default_profile_path", profile_file("default.json"))
             with open(target, "w") as f:
                 json.dump({"leds": defaults}, f, indent=4)
+            self._sync_workstation_library()
             self.load_profile_internal(target, silent=True)
         except Exception as e:
             print(f"DEBUG: Failed to save default profile: {e}")
@@ -10546,10 +13112,18 @@ class ArcadeGUI_V2:
             with open(self.config_file, "w") as f: f.write(path)
         except: pass
     def save_profile(self):
-        f = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Profile", "*.json")])
+        profile_dir = os.path.dirname(getattr(self, "default_profile_path", profile_file("default.json")))
+        os.makedirs(profile_dir, exist_ok=True)
+        f = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("Profile", "*.json")],
+            initialdir=profile_dir,
+        )
         if f:
             with open(f, "w") as j: json.dump({"leds": self.led_state}, j, indent=4)
-            self.update_last_profile_path(f); messagebox.showinfo("Saved", "Profile Saved")
+            self.update_last_profile_path(f)
+            self._sync_workstation_library()
+            messagebox.showinfo("Saved", "Profile Saved")
     def load_profile(self):
         f = filedialog.askopenfilename(filetypes=[("Profile", "*.json")])
         if f: self.load_profile_internal(f)

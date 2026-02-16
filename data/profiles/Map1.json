@@ -1,0 +1,752 @@
+{
+    "leds": {
+        "P1_A": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_B": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_C": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_X": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_Y": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_Z": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_A": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_B": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_C": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_X": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_Y": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_Z": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "REWIND": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P1_START": {
+            "primary": [
+                255,
+                59,
+                48
+            ],
+            "secondary": [
+                255,
+                149,
+                0
+            ],
+            "colors": [
+                [
+                    255,
+                    59,
+                    48
+                ],
+                [
+                    255,
+                    149,
+                    0
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    45,
+                    85
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "MENU": {
+            "primary": [
+                175,
+                82,
+                222
+            ],
+            "secondary": [
+                255,
+                255,
+                255
+            ],
+            "colors": [
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    255,
+                    255
+                ],
+                [
+                    175,
+                    82,
+                    222
+                ],
+                [
+                    255,
+                    255,
+                    255
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "P2_START": {
+            "primary": [
+                10,
+                218,
+                241
+            ],
+            "secondary": [
+                0,
+                199,
+                190
+            ],
+            "colors": [
+                [
+                    10,
+                    218,
+                    241
+                ],
+                [
+                    0,
+                    199,
+                    190
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        },
+        "TRACKBALL": {
+            "primary": [
+                108,
+                255,
+                182
+            ],
+            "secondary": [
+                52,
+                199,
+                89
+            ],
+            "colors": [
+                [
+                    108,
+                    255,
+                    182
+                ],
+                [
+                    52,
+                    199,
+                    89
+                ],
+                [
+                    0,
+                    128,
+                    0
+                ],
+                [
+                    0,
+                    102,
+                    51
+                ]
+            ],
+            "fx": [
+                null,
+                null,
+                null,
+                null
+            ],
+            "fx_mode": null,
+            "pulse": false,
+            "speed": 1.0,
+            "phase": 0.0
+        }
+    }
+}

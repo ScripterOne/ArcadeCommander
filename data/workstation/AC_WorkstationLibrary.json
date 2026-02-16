@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "updated_at": 1771201876.5134687,
+  "button_maps": {
+    "default": {
+      "name": "default",
+      "controls": {
+        "P1_A": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P1_B": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P1_C": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P1_X": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P1_Y": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P1_Z": "0,0,255|0,0,0|0,0,0|0,0,0",
+        "P2_A": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P2_B": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P2_C": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P2_X": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P2_Y": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P2_Z": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "REWIND": "255,0,0|0,0,0|0,0,0|0,0,0",
+        "P1_START": "255,255,255|0,0,0|0,0,0|0,0,0",
+        "MENU": "255,255,255|0,0,0|0,0,0|0,0,0",
+        "P2_START": "255,255,255|0,0,0|0,0,0|0,0,0",
+        "TRACKBALL": "255,255,255|0,0,0|0,0,0|0,0,0"
+      },
+      "source": "profile",
+      "path": "C:\\Users\\mark\\OneDrive\\Documents\\GitHub\\ArcadeCommander\\data\\profiles\\default.json"
+    },
+    "Map1": {
+      "name": "Map1",
+      "controls": {
+        "P1_A": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P1_B": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P1_C": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P1_X": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P1_Y": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P1_Z": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "P2_A": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "P2_B": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "P2_C": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "P2_X": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "P2_Y": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "P2_Z": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "REWIND": "255,59,48|255,149,0|255,59,48|255,149,0",
+        "P1_START": "255,59,48|255,149,0|175,82,222|255,45,85",
+        "MENU": "175,82,222|255,255,255|175,82,222|255,255,255",
+        "P2_START": "10,218,241|0,199,190|52,199,89|0,128,0",
+        "TRACKBALL": "108,255,182|52,199,89|0,128,0|0,102,51"
+      },
+      "source": "profile",
+      "path": "C:\\Users\\mark\\OneDrive\\Documents\\GitHub\\ArcadeCommander\\data\\profiles\\Map1.json"
+    }
+  },
+  "effects": {
+    "RAINBOW": {
+      "name": "RAINBOW",
+      "fx_id": "023fd526-1bac-4b59-9c7b-da513e30113b",
+      "audio_path": "",
+      "source": "quick_fx_template"
+    },
+    "BREATH": {
+      "name": "BREATH",
+      "fx_id": "0d9fefbf-687f-42b0-929b-42969d73e8f9",
+      "audio_path": "",
+      "source": "quick_fx_template"
+    },
+    "STROBE": {
+      "name": "STROBE",
+      "fx_id": "ff2acd4b-12ad-43ee-b9ac-429cd93d170f",
+      "audio_path": "",
+      "source": "quick_fx_template"
+    },
+    "FADE": {
+      "name": "FADE",
+      "fx_id": "9cc7eb61-3980-4b65-91a4-380d2a7fb8a0",
+      "audio_path": "",
+      "source": "quick_fx_template"
+    },
+    "EFFECTS: SHOWROOM DEFAULT": {
+      "name": "EFFECTS: SHOWROOM DEFAULT",
+      "fx_id": "b80c1e80-c1a7-46b0-b6e6-27c6fb5d1926",
+      "audio_path": "",
+      "source": "effects_preset"
+    },
+    "EFFECTS: CLASSIC STATIC": {
+      "name": "EFFECTS: CLASSIC STATIC",
+      "fx_id": "b7e73d91-c0fa-46c3-8ff8-e4a7af73bfab",
+      "audio_path": "",
+      "source": "effects_preset"
+    },
+    "EFFECTS: NEON MINIMAL": {
+      "name": "EFFECTS: NEON MINIMAL",
+      "fx_id": "d2fff43c-369c-4f3e-beb9-acfd03a6bc2b",
+      "audio_path": "",
+      "source": "effects_preset"
+    },
+    "EFFECTS: PARTY MODE": {
+      "name": "EFFECTS: PARTY MODE",
+      "fx_id": "34b8e5ee-9110-4121-ba6c-06a3cfa9cd5c",
+      "audio_path": "",
+      "source": "effects_preset"
+    },
+    "Bouncer": {
+      "name": "Bouncer",
+      "fx_id": "080079e5-3d13-4530-8efb-4e631797e861",
+      "audio_path": "tmpsc43zn3_.wav",
+      "source": "audio_sequence"
+    },
+    "EFFECTS: TEASE": {
+      "name": "EFFECTS: TEASE",
+      "fx_id": "df0e3db2-7c69-43ef-9db4-294676b6ae4a",
+      "audio_path": "",
+      "source": "effects_preset"
+    },
+    "EFFECTS: TEASE INDEPENDENT": {
+      "name": "EFFECTS: TEASE INDEPENDENT",
+      "fx_id": "ea439ad8-cbfd-495d-9af4-30cfaccb26a5",
+      "audio_path": "",
+      "source": "effects_preset"
+    }
+  },
+  "animations": {
+    "DemoAnim": {
+      "name": "DemoAnim",
+      "events": {
+        "GAME_START": [
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          },
+          {
+            "anim": "HYPER_STROBE",
+            "duration": 2.0
+          },
+          {
+            "anim": "PULSE_RED",
+            "duration": 1.0
+          },
+          {
+            "anim": "TEASE_INDEPENDENT",
+            "duration": 5.0
+          },
+          {
+            "anim": "RAINBOW",
+            "duration": 3.0
+          }
+        ],
+        "DEFAULT": [
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          },
+          {
+            "anim": "PULSE_RED",
+            "duration": 2.0
+          },
+          {
+            "anim": "PULSE_BLUE",
+            "duration": 2.0
+          },
+          {
+            "anim": "PULSE_GREEN",
+            "duration": 2.0
+          },
+          {
+            "anim": "HYPER_STROBE",
+            "duration": 2.0
+          },
+          {
+            "anim": "ALL_OFF",
+            "duration": 2.0
+          },
+          {
+            "anim": "DEMOMODE",
+            "duration": 2.0
+          },
+          {
+            "anim": "BAZERK",
+            "duration": 2.0
+          },
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          }
+        ],
+        "GAME_QUIT": [
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          }
+        ],
+        "FE_START": [
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          }
+        ],
+        "FE_QUIT": [
+          {
+            "anim": "RAINBOW",
+            "duration": 2.0
+          }
+        ]
+      },
+      "has_audio_sequence": false
+    }
+  }
+}

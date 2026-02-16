@@ -5,9 +5,35 @@ Release Channel: ALPHA (Pre-Release)
 Primary Application: `ArcadeCommanderV2.exe`
 Companion Services: `ACLighter.exe`, `ACDispatch.exe`
 
-## 0. How to Use This Manual
+## 0. Introduction and Release Status
 
-This manual is written for cabinet builders, operators, and integrators who need full control of Arcade Commander 2.0.
+Arcade Commander 2.0 is a cabinet lighting orchestration platform for RGB/GRB control decks. It combines live operation, effect authoring, game-aware mapping, and external automation in a single system.
+
+### 0.1 What This Release Includes
+
+- `ArcadeCommanderV2.exe`: primary operator and configuration UI.
+- `ACLighter.exe`: runtime service that applies lighting to hardware.
+- `ACDispatch.exe`: CLI bridge for frontend and automation workflows.
+
+### 0.2 Release Channel and Stability Notice
+
+This release is in `ALPHA`. Core workflows are functional, but behavior and schema details can still evolve between builds. Treat this release as production-capable only after local validation against your exact cabinet profile.
+
+Recommended ALPHA operating rules:
+
+1. Snapshot `data/` before major edits.
+2. Validate one known game map and one known effect after each update.
+3. Keep a previous known-good package available for rollback.
+
+### 0.3 Intended Audience
+
+This manual targets:
+
+- Cabinet builders deploying new control decks.
+- Operators maintaining daily lighting behavior.
+- Integrators wiring frontend hooks and event automation.
+
+### 0.4 How to Use This Manual
 
 Read order recommendation:
 
@@ -78,6 +104,14 @@ Shared files:
 - Effects: `data/library/AC_FXLibrary.json`
 - Animations: `data/library/AC_AnimationLibrary.json`
 
+### 1.4 Application Tabs at a Glance
+
+- `ARCADE COMMANDER`: live apply/test surface and runtime control.
+- `EMULATOR`: preview environment for validating mappings without hardware output.
+- `GAME MANAGER`: per-ROM assignment for keymaps, profiles, and FX/event behavior.
+- `FX EDITOR`: effect and animation authoring surface with shared library save.
+- `CONTROLLER CONFIG`: control deck topology, player count, and hardware profile definition.
+
 [GRAPHIC PLACEHOLDER G-01: Suite Architecture Diagram]
 - Purpose: Explain data/control boundaries between the three executables.
 - Required image: Diagram with 3 app boxes, loopback socket, and `data/` folder.
@@ -125,6 +159,27 @@ Why this order matters:
 1. Stop external automation scripts (if active).
 2. Close `ArcadeCommanderV2.exe`.
 3. Exit `ACLighter.exe` from tray menu.
+
+### 2.5 Linux Runtime Notes (x86_64 Build)
+
+Linux packaging is distributed as a tarball containing all three executables.
+
+Expected binaries:
+
+- `ArcadeCommanderV2/ArcadeCommanderV2`
+- `ArcadeCommanderV2/ACLighter`
+- `ArcadeCommanderV2/ACDispatch`
+
+First-run flow:
+
+1. Extract package: `tar -xzf <package>.tar.gz`
+2. Set execute permission: `chmod +x ArcadeCommanderV2 ArcadeCommanderV2/ACLighter ArcadeCommanderV2/ACDispatch`
+3. Start service: `./ACLighter &`
+4. Start UI: `./ArcadeCommanderV2`
+
+Operational note:
+
+- Keep `Consol.png` and companion assets beside the executable directory when repackaging to avoid runtime image load failures.
 
 [GRAPHIC PLACEHOLDER G-02: Startup Order Visual]
 - Purpose: Show exact launch/shutdown sequence.
@@ -455,18 +510,23 @@ Expected result:
 Idle reset:
 
 - `ACDispatch.exe`
+- `./ACDispatch` (Linux)
 
 Trigger animation:
 
 - `ACDispatch.exe --anim RAINBOW`
+- `./ACDispatch --anim RAINBOW` (Linux)
 
 Trigger event mapping:
 
 - `ACDispatch.exe --event GAME_START <rom_name>`
+- `ACDispatch.exe --event FE_START`
+- `./ACDispatch --event FE_START` (Linux)
 
 Load game profile behavior:
 
 - `ACDispatch.exe <rom_name>`
+- `./ACDispatch <rom_name>` (Linux)
 
 ### 8.2 Supported Event Family
 
@@ -659,6 +719,25 @@ When escalating, capture and attach:
 - Screenshot of UI state.
 - Relevant JSON snippet from `data/games` or `data/library`.
 - Build versions and environment notes.
+
+### 11.6 Packaged Build Error: Could Not Find `Consol.png`
+
+Symptoms:
+
+- Application starts, but startup banner/background image fails and an error dialog reports missing `Consol.png`.
+
+Likely causes:
+
+- Image file not included in packaged output.
+- Asset path resolved from working directory instead of executable directory.
+- Zip/tar was built from the wrong folder depth, dropping required assets.
+
+Actions:
+
+1. Confirm `Consol.png` exists in the packaged runtime directory next to the executable or expected asset folder.
+2. Confirm package includes all runtime assets, not just `.exe`/binary files.
+3. Rebuild package from the distribution folder root and retest using the packaged executable, not the source-tree executable.
+4. If hotfixed build logic is used, verify path fallback resolves to bundled locations before release.
 
 [GRAPHIC PLACEHOLDER G-15: Troubleshooting Decision Tree]
 - Purpose: Speed root-cause isolation for field issues.

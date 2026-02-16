@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arcade Commander 2.0 | Arcade Cabinet LED Control Suite</title>
+    <meta name="description" content="Arcade Commander 2.0 is a Windows LED control suite for arcade cabinets with live control, shared FX libraries, and event-driven automation.">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+    <div class="retro-grid"></div>
+    <div class="scanlines"></div>
+
+    <nav class="navbar">
+        <div class="logo">ARCADE COMMANDER</div>
+        <ul class="nav-links">
+            <li><a href="#features">Features</a></li>
+            <li><a href="#workflow">Workflow</a></li>
+            <li><a href="#download" class="btn-nav">Downloads</a></li>
+        </ul>
+    </nav>
+
+    <header class="hero">
+        <div class="container hero-content">
+            <div class="hero-text">
+                <h1>ARCADE COMMANDER <span class="version">2.0</span></h1>
+                <p class="subheadline">The complete LED control suite for arcade cabinets. Real-time control, shared FX libraries, and frontend automation.</p>
+                <div class="cta-group">
+                    <a href="#download" class="btn btn-primary glow-effect">Get Suite</a>
+                    <a href="USER_MANUAL_V2.rtf" class="btn btn-secondary">User Manual</a>
+                </div>
+            </div>
+            <div class="hero-image">
+                <img src="ArcadeCommanderSplash.jpg" alt="Arcade Commander Splash Art" class="glow-border">
+            </div>
+        </div>
+    </header>
+
+    <section class="about section-padding">
+        <div class="container">
+            <div class="glass-panel">
+                <h2>What is Arcade Commander?</h2>
+                <p>Arcade Commander 2.0 is a Windows-based lighting platform built for arcade cabinets. It combines live control, effect authoring, game-specific mapping, and automation in one coordinated suite. With <strong>ArcadeCommanderV2</strong>, <strong>ACLighter</strong>, and <strong>ACDispatch</strong> working together, operators can design, test, and trigger lighting behavior with consistent results.</p>
+            </div>
+        </div>
+    </section>
+
+    <section id="features" class="features section-padding">
+        <div class="container">
+            <h2 class="section-title">Feature Highlights</h2>
+            <div class="grid-3">
+                <div class="card">
+                    <div class="icon">⚙️</div>
+                    <h3>Coordinated Suite</h3>
+                    <p>Three coordinated components: Commander UI, Lighter Service, and Dispatcher CLI working in sync.</p>
+                </div>
+                <div class="card">
+                    <div class="icon">📂</div>
+                    <h3>Shared Catalogs</h3>
+                    <p>Save once and use effects across Commander, Emulator, and FX Editor using shared libraries.</p>
+                </div>
+                <div class="card">
+                    <div class="icon">⚡</div>
+                    <h3>Fast Validation</h3>
+                    <p>Build and preview in FX Editor, verify in Emulator, then apply live. No more guessing.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="workflow" class="workflow section-padding">
+        <div class="container">
+            <h2 class="section-title">One Workflow, End to End</h2>
+            <div class="workflow-steps">
+                <div class="step">
+                    <span class="step-number">01</span>
+                    <h3>Configure</h3>
+                    <p>Set up hardware in Controller Config.</p>
+                </div>
+                <div class="step">
+                    <span class="step-number">02</span>
+                    <h3>Build FX</h3>
+                    <p>Create and preview effects in FX Editor.</p>
+                </div>
+                <div class="step">
+                    <span class="step-number">03</span>
+                    <h3>Map</h3>
+                    <p>Assign behavior per game in Game Manager.</p>
+                </div>
+                <div class="step">
+                    <span class="step-number">04</span>
+                    <h3>Run Live</h3>
+                    <p>Deploy with ACLighter and ACDispatch.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section id="download" class="download section-padding">
+        <div class="container">
+            <h2 class="section-title">Download Suite</h2>
+            <div class="download-grid">
+                <div class="download-card primary">
+                    <h3>ArcadeCommanderV2.exe</h3>
+                    <p>The primary operator UI and effect editor.</p>
+                    <a href="ArcadeCommanderV2.exe" class="btn btn-primary" download>Download App</a>
+                </div>
+                <div class="download-card">
+                    <h3>ACLighter.exe</h3>
+                    <p>Background lighting service daemon.</p>
+                    <a href="ACLighter.exe" class="btn btn-secondary" download>Download Service</a>
+                </div>
+                <div class="download-card">
+                    <h3>ACDispatch.exe</h3>
+                    <p>Command line tool for automation.</p>
+                    <a href="ACDispatch.exe" class="btn btn-secondary" download>Download CLI</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <h3>ARCADE COMMANDER</h3>
+                    <p>Launch smarter cabinet lighting workflows.</p>
+                </div>
+                <div class="footer-links">
+                    <h4>Documentation</h4>
+                    <ul>
+                        <li><a href="USER_MANUAL_V2.rtf">User Manual (RTF)</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="copyright">
+                <p>&copy; 2026 Arcade Commander. Built for the Arcade Community.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

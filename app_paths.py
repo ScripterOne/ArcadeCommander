@@ -16,6 +16,8 @@ GAMES_DIR = os.path.join(DATA_DIR, "games")
 LIBRARY_DIR = os.path.join(DATA_DIR, "library")
 PROFILES_DIR = os.path.join(DATA_DIR, "profiles")
 KEYMAP_DIR = os.path.join(DATA_DIR, "keymaps")
+WORKSTATION_DIR = os.path.join(DATA_DIR, "workstation")
+WORKSTATION_BUTTONMAP_DIR = os.path.join(WORKSTATION_DIR, "buttonmaps")
 
 
 def settings_file() -> str:
@@ -42,6 +44,14 @@ def animation_library_file() -> str:
     return os.path.join(LIBRARY_DIR, "AC_AnimationLibrary.json")
 
 
+def workstation_library_file() -> str:
+    return os.path.join(WORKSTATION_DIR, "AC_WorkstationLibrary.json")
+
+
+def workstation_buttonmap_dir() -> str:
+    return WORKSTATION_BUTTONMAP_DIR
+
+
 def profile_file(name: str) -> str:
     return os.path.join(PROFILES_DIR, name)
 
@@ -51,7 +61,16 @@ def keymap_dir() -> str:
 
 
 def ensure_runtime_dirs() -> None:
-    for path in (DATA_DIR, CONFIG_DIR, GAMES_DIR, LIBRARY_DIR, PROFILES_DIR, KEYMAP_DIR):
+    for path in (
+        DATA_DIR,
+        CONFIG_DIR,
+        GAMES_DIR,
+        LIBRARY_DIR,
+        PROFILES_DIR,
+        KEYMAP_DIR,
+        WORKSTATION_DIR,
+        WORKSTATION_BUTTONMAP_DIR,
+    ):
         os.makedirs(path, exist_ok=True)
 
 
@@ -92,9 +111,11 @@ def migrate_legacy_runtime_files() -> None:
         os.path.join(APP_ROOT, "AC_GameData.json"): game_db_file(),
         os.path.join(APP_ROOT, "AC_FXLibrary.json"): fx_library_file(),
         os.path.join(APP_ROOT, "AC_AnimationLibrary.json"): animation_library_file(),
+        os.path.join(APP_ROOT, "AC_WorkstationLibrary.json"): workstation_library_file(),
         os.path.join(APP_ROOT, "default.json"): profile_file("default.json"),
         os.path.join(APP_ROOT, "Default.json"): profile_file("Default.json"),
     }
     for src, dst in legacy.items():
         _move_if_needed(src, dst)
     _merge_keymaps_legacy(os.path.join(APP_ROOT, "keymaps"), keymap_dir())
+    _merge_keymaps_legacy(os.path.join(APP_ROOT, "buttonmaps"), workstation_buttonmap_dir())
